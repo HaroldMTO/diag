@@ -9,16 +9,28 @@ Description:
 	Produce a list of diagnostics on model forecasts
 
 Usage:
-	diag.sh (-conf CONFIG|-file FILE -param PAR -level LEV) [-o HTML] [-ref PATH] [-h]
+	diag.sh [-conf CONFIG] [-o HTML] [-ref PATH] [-h]
 
 Arguments:
-	PATH: path to where to find reference files
+	CONFIG: path to a directory containing files for settings: param.txt, domain.txt and \
+file.txt as mandatory files, and optionally level.txt and date.txt (see details)
 	HTML: path to output files (graphics and HTML files)
+	PATH: path where to find reference files
 	-h: print this help and exits normally
 
 Details:
+	Default value for CONFIG is the local directory config/. This directory must contain \
+files param.txt, domain.txt and file.txt, respectively indicating parameters, domains \
+and files to target for graphical and statistical diagnostics. Optionnally, it can also \
+contain files level.txt and date.txt, indicating levels to filter (given as indices in \
+the range [1-NFLEVG]) and base dates to read for files. If date.txt is present, paths to \
+files given in file.txt are prepended by 'HH/YYYYMMDD/', meaning that files are to be \
+located in directory hierarchy with time (HH) and date (YYYYMMDD) information.
 	PATH is the path to a hierarchy of files and directories following \
-'HH/YYYYMMDD/file_ref'.
+'HH/YYYYMMDD/filename', where HH is a reference to some 'base time' in 00-24 format, \
+YYYYMMDD is the 'base date' and filename is the name of a file (with its extension, \
+if any). The 'base date/time' is the moment from which the product is considered to be \
+existing (ie it can be used).
 
 Dependencies:
 	R software
@@ -32,9 +44,6 @@ then
 fi
 
 conf="config"
-fic=""
-lev=""
-par=""
 graph=1
 html=""
 
@@ -43,18 +52,6 @@ do
 	case $1 in
 		-conf)
 			conf=$2
-			shift
-			;;
-		-level)
-			lev=$2
-			shift
-			;;
-		-param)
-			par=$2
-			shift
-			;;
-		-file)
-			fic=$2
 			shift
 			;;
 		-ref)
@@ -78,9 +75,9 @@ done
 
 if [ -n "$conf" ]
 then
-	[ -z "$fic" ] && fic=$conf/file.txt
-	[ -z "$lev" -a -s $conf/level.txt ] && lev=$conf/level.txt || lev=0
-	[ -z "$par" ] && par=$conf/param.txt
+	fic=$conf/file.txt
+	par=$conf/param.txt
+	[ -s $conf/level.txt ] && lev=$conf/level.txt || lev=0
 fi
 
 if [ -z "$fic" -o -z "$lev" -o -z "$par" ]
@@ -196,6 +193,19 @@ do
 
 				echo "</tr>"
 			done
+
+			echo "<tr><th colspan='2'>Param '$par' min/max - Domain $dom</th></tr>"
+			echo "<tr>"
+
+			for typ in mapn mapx
+			do
+				fic=$loc/$typ$it${dom}_$par.png
+				[ -s $fic ] || continue
+
+				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+			done
+
+			echo "</tr>"
 		done > $loc/idom.html
 
 		if grep -qE '<img .+ src=' $loc/idom.html

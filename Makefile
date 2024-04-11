@@ -1,17 +1,17 @@
 MAKEFLAGS += --no-print-directory
 
 # ne pas mettre ~ pour P : il faut un chemin absolu
-P = $(HOME)/proc/diags
+P = $(HOME)/proc/diag
 B = ~/bin
 
-.PHONY: build install diags
+.PHONY: build install diag
 
 build:
 	# rien
 
 install:
 	! git status --porcelain 2>/dev/null | grep -qvE "^\?\? "
-	make diags
+	make diag
 	make $B/epy_dump.py
 	make $B/diag.sh
 	make $B/obstat.sh
@@ -20,7 +20,7 @@ install:
 			git log -1 --oneline >> $P/version; \
 	fi
 
-diags:
+diag:
 	mkdir -p $P
 	cp -pruv diag.R obstat.R img.html obstat.html $P
 
@@ -28,9 +28,9 @@ $B/epy_dump.py: epy_dump.py
 	cp -uv epy_dump.py $B
 
 $B/diag.sh: diag.sh
-	sed -re "s:diags=.+:diags=$P:" diag.sh > $B/diag.sh
+	sed -re "s:diag=.+:diag=$P:" diag.sh > $B/diag.sh
 	chmod a+x $B/diag.sh
 
 $B/obstat.sh: obstat.sh
-	sed -re "s:diags=.+:diags=$P:" obstat.sh > $B/obstat.sh
+	sed -re "s:diag=.+:diag=$P:" obstat.sh > $B/obstat.sh
 	chmod a+x $B/obstat.sh
