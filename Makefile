@@ -22,7 +22,7 @@ install:
 
 diag:
 	mkdir -p $P
-	cp -pruv diag.R obstat.R img.html obstat.html $P
+	cp -pruv diag.R obstat.R obstat.html $P
 
 $B/epy_dump.py: epy_dump.py
 	cp -uv epy_dump.py $B
