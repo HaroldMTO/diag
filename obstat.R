@@ -48,6 +48,26 @@ readDef = function(nd)
 	linfo
 }
 
+readItems = function(nd,ii,items,statkind)
+{
+	indi = grep("^ *BEGIN STATITEM",nd[ii])+ii[1]
+	indie = grep("^ *END STATITEM",nd[ii])+ii[1]-2
+	inul = which(indi > indie)
+	if (length(inul) > 0) {
+		#cat("--> remove",length(inul),"nul items\n")
+		items = items[-inul]
+	}
+
+	if (length(items) > 6) {
+		#cat("--> limiting items to 6 out of",length(items),"\n")
+		length(items) = 6
+	}
+
+	litems = lapply(seq(along=items),function(j) readItem(nd[indi[j]:indie[j]],statkind))
+
+	litems
+}
+
 readItem = function(nd,stat)
 {
 	item = sub("^ *#item *: *(.+) *","\\1",nd[1])
@@ -69,30 +89,19 @@ readItem = function(nd,stat)
 	list(item=item,data=df)
 }
 
-pngalt = function(...)
-{
-	if (ask && ! is.null(dev.list())) invisible(readline("Press enter to continue"))
-	if (! hasx11) png(...)
-}
-
-pngoff = function(op)
-{
-	if (! hasx11) {
-		invisible(dev.off())
-	} else if (! missing(op)) {
-		par(op)
-	}
-}
-
 args = commandArgs(trailingOnly=TRUE)
 
-hasx11 = length(args) < 2 && capabilities("X11")
-if (! hasx11) cat("--> no X11 device, sending plots to PNG files\n")
-ask = hasx11 && interactive()
-
 fobs = args[1]
-pngd = "obstat"
+pngd = NULL
 if (length(args) == 2) pngd = args[2]
+
+if (! is.null(pngd) || ! capabilities("X11")) {
+	if (is.null(pngd)) pngd = "obstat"
+	cat("--> no X11 device, sending plots to PNG files in",pngd,"\n")
+} else {
+	png = dev.off = function(...) return(invisible(NULL))
+	if (interactive()) options(device.ask.default=TRUE)
+}
 
 cat("Read file",fobs,"\n")
 nd = readLines(fobs)
@@ -102,7 +111,9 @@ inde = grep("^ *END STATDEF",nd)-1
 stopifnot(length(ind) == length(inde))
 
 ii = which(ind > inde)
-if (length(ii) > 0) cat("-->",length(ii),"nul def\n")
+nstat = length(ind)
+n0 = length(ii)
+cat("--> parse",nstat-n0,"statdef, with",n0,"nul def\n")
 
 # for next "BEGIN STATDEF"
 ind = c(ind,length(nd))
@@ -119,43 +130,21 @@ for (i in seq(along=inde)) {
 
 	# items
 	ii = (inde[i]+1):(ind[i+1]-1)
-	indi = grep("^ *BEGIN STATITEM",nd[ii])+ii[1]
-	indie = grep("^ *END STATITEM",nd[ii])+ii[1]-2
-	inul = which(indi > indie)
-	if (length(inul) > 0) {
-		#cat("--> remove",length(inul),"nul items\n")
-		def$items = def$items[-inul]
-	}
+	def$items = readItems(nd,ii,def$items,def$statkind)
+
+	defs[[i]] = def
+
+	if (length(def$items) == 0) next
 
 	tt = paste(def$comment,def$areaNSEW)
 	if (any(def$instrument != 999)) {
 		tt[2] = sprintf("instrument(s): %s",paste(def$instrument,collapse=" "))
 	}
-
-	if (length(def$items) == 0) {
-		#cat("--> no items\n")
-		def$items = list()
-		defs[[i]] = def
-		next
-	} else if (length(def$items) > 6) {
-		#cat("--> limiting items to 6 out of",length(def$items),"\n")
-		length(def$items) = 6
-	}
-
-	items = list()
-	for (j in seq(along=def$items)) {
-		items[[j]] = readItem(nd[indi[j]:indie[j]],def$statkind)
-	}
-
-	def$items = items
-
-	defs[[i]] = def
-
 	s = gsub(" ","-",def$comment)
 	if (regexpr("-",s) < 0) s = sprintf("%s-X",s)
 	ficpng = sprintf("%s/%s_%s.png",pngd,s,gsub("\\.","",def$areaNSEW))
 	#cat(". file",ficpng,"\n")
-	pngalt(ficpng)
+	png(ficpng)
 
 	nc = max(1,length(def$items)%/%3)
 	nr = length(def$items)%/%nc
@@ -163,14 +152,14 @@ for (i in seq(along=inde)) {
 
 	if (def$statkind == 2) {
 		for (j in seq(along=def$items)) {
-			item = items[[j]]
+			item = def$items[[j]]
 			barplot(item$data$population,col="grey98",space=0,main=tt,xlab=item$item,
 				ylab="population")
 			axis(1)
 		}
 	} else {
 		for (j in seq(along=def$items)) {
-			item = items[[j]]
+			item = def$items[[j]]
 			ylim = range(item$data[,1])
 			if (names(item$data)[1] == "Pressure") ylim = rev(ylim)
 			matplot(item$data[,-(1:2)],item$data[,1],type="o",main=tt,xlab=item$item,
@@ -181,10 +170,8 @@ for (i in seq(along=inde)) {
 		}
 	}
 
-	pngoff()
+	dev.off()
 }
-
-q("no")
 
 comm = sapply(defs,"[[","comment")
 area = sapply(defs,"[[","areaNSEW")
@@ -207,6 +194,24 @@ if (length(it) > 0) {
 }
 
 if (length(idup) > 0) {
-	#cat("--> duplicates:",idup,"\n")
+	cat("--> duplicates:",idup,"\n")
 	defs = defs[-idup]
 }
+
+i = unlist(sapply(defs,function(x) x$instrument))
+s = unlist(sapply(defs,function(x) x$statkind))
+p = unlist(sapply(defs,function(x) x$params))
+f = sapply(defs,function(x) x$flagfilter)
+t = unlist(sapply(defs,function(x) x$types))
+a = sapply(defs,function(x) x$areaNSEW)
+n = sapply(defs,function(x) length(x$items))
+cat("Summary:\n")
+cat(". instruments:",sort(unique(i)),"\n")
+cat(". params:",sort(unique(p)),"\n")
+cat(". types:",sort(unique(t)),"\n")
+cat(". flagfilter:\n")
+print(table(f))
+cat(". statkind:\n")
+print(table(s))
+cat(". area:\n")
+print(table(a))

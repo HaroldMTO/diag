@@ -1,6 +1,6 @@
 #!/bin/sh
 
-diags=~/util/diags
+diags=~/util/diag
 
 set -e
 
@@ -74,6 +74,7 @@ then
 	exit 1
 fi
 
+echo "Create graphics from obstat file $fin in $png"
 mkdir -p $png
 
 type R >/dev/null 2>&1 || module -s load intel R >/dev/null 2>&1
@@ -86,7 +87,7 @@ trap 'rm -r $temp' EXIT
 
 for grp in $groups
 do
-	echo ". create $grp.html"
+	echo ". group $grp.html"
 
 	re="s:$grp-(.+)_.+:\1:"
 	for par in $(ls -1 $png | grep "^$grp-" | sed -re "$re" | sort -u | xargs)
@@ -104,5 +105,6 @@ do
 		echo "</tr></table>"
 	done > $temp/$grp.html
 
-	sed -re "/TAG IMG/r $temp/$grp.html" $diags/obstat.html > $grp.html
+	sed -re "s:TAG GROUP:$grp:" -e "/TAG IMG/r $temp/$grp.html" $diags/obstat.html > \
+		$grp.html
 done
