@@ -1,6 +1,6 @@
 #!/bin/sh
 
-diags=~/util/diags
+diags=~/util/diag
 
 usage()
 {
@@ -9,12 +9,12 @@ Description:
 	Produce a list of diagnostics on model forecasts
 
 Usage:
-	diag.sh [-conf CONFIG] [-o HTML] [-ref PATH] [-h]
+	diag.sh [-conf CONFIG] [-o PNG] [-ref PATH] [-h]
 
 Arguments:
 	CONFIG: path to a directory containing files for settings: param.txt, domain.txt and \
 file.txt as mandatory files, and optionally level.txt and date.txt (see details)
-	HTML: path to output files (graphics and HTML files)
+	PNG: path to output files (graphics + some HTML files)
 	PATH: path where to find reference files
 	-h: print this help and exits normally
 
@@ -45,7 +45,10 @@ fi
 
 conf="config"
 graph=1
-html=""
+mapstat=1
+loc=""
+ref=.
+cmp=""
 
 while [ $# -ne 0 ]
 do
@@ -58,12 +61,19 @@ do
 			ref=$2
 			shift
 			;;
+		-cmp)
+			cmp=$2
+			shift
+			;;
 		-o)
-			html=$2
+			loc=$2
 			shift
 			;;
 		-nograph)
 			graph=0
+			;;
+		-nomapstat)
+			mapstat=0
 			;;
 		*)
 			echo "Warning: unknown option '$1', ignored" >&2
@@ -73,57 +83,40 @@ do
 	shift
 done
 
-if [ -n "$conf" ]
-then
-	fic=$conf/file.txt
-	par=$conf/param.txt
-	[ -s $conf/level.txt ] && lev=$conf/level.txt || lev=0
-fi
-
-if [ -z "$fic" -o -z "$lev" -o -z "$par" ]
+if [ -z "$conf" -o -z "$ref" ]
 then
 	echo "Error: input options missing
 conf: '$conf'
-lev: '$lev'
-par: '$par'
-fic: '$fic'" >&2
+ref: '$ref'" >&2
 	exit 1
-fi
-
-if [ ! -s $lev ] && ! echo $lev | grep -qE '[0-9]+(:[0-9]+)*'
-then
-	echo "Error: option '-level' uncorrectly defined" >&2
-	exit 1
-	#echo $lev | tr ':' '\n' > $loc/levels.txt
 fi
 
 set -e
 
-ls $par > /dev/null
 if [ -n "$ref" ]
 then
 	ls -d $ref > /dev/null
-	opt="ref=$ref"
 fi
 
-if [ -n "$html" ]
+opt=""
+if [ -n "$cmp" ]
 then
-	loc=$html
+	opt="cmp=$cmp"
+fi
+
+if [ -n "$loc" ]
+then
+	mkdir -p $loc
 else
 	loc=$(mktemp -d diagXXX)
+	echo "--> sending output to $loc"
 fi
-
-echo "--> sending output to $loc"
-mkdir -p $loc
 
 if [ $graph -eq 1 ]
 then
 	type R > /dev/null 2>&1 || module -s load intel R > /dev/null 2>&1
-	R --slave -f $diags/diag.R --args fic=$fic params=$par level=$lev png=$loc $opt > \
-		$loc/diag.log
+	R --slave -f $diags/diag.R --args png=$loc ref=$ref mapstat=$mapstat $opt > $loc/diag.log
 fi
-
-[ -n "$html" ] || exit
 
 ficdom=$conf/domain.txt
 if [ ! -s $ficdom ]
@@ -138,109 +131,134 @@ params=$(ls -1 $loc | grep -E 'map[1-9].+_\w+\.png$' | sed -re 's:.+_(\w+)\.png:
 echo "HTML files: $(cat $loc/steps.txt | wc -l) forecast steps
 domains: $doms"
 
+while read -a tt
+do
+	echo ${tt[*]} | grep -q " TRUE" && printf "\t<option>%s</option>\n" "${tt[*]}"
+done < $loc/steps.txt > $loc/steps.html
+
 for par in $params
 do
-	ficpar=$(dirname $html)/$par.html
+	ficpar=$(dirname $loc)/$par.html
 	echo ". creating $ficpar"
 
-	{
+	rm -f $loc/*_$par.html $par.log
+
+	echo ".. maps, hists and options (maph.html)"
 	it=0
 	while read -a tt
 	do
 		it=$((it+1))
-		echo ${tt[*]} | grep -qE 'graph: TRUE' || continue
+		echo ${tt[*]} | grep -qE ' graph: TRUE' || continue
 
-		echo "<table>"
-		echo "<tr><th>Maps, selection of levels</th><th>Cross-sections and diagrams</th>"
-		att="colspan='2'"
-		if [ -n "$ref" ]
-		then
-			echo "<th>Maps for reference</th><th>Cross-sections and diagrams for ref</th>"
-			att="colspan='4'"
-		fi
-
-		echo "</tr>"
+		base=$(echo ${tt[*]} | sed -re 's:base/step\: ([12][0-9]+) R([0-9]+) (\+[0-9]+\w*) .+:\1\2\3:')
+		step=$(echo ${tt[*]} | sed -re 's:base/step\: [12][0-9]+ R[0-9]+ \+([0-9]+\w*) .+:\1:')
+		title=$(echo ${tt[*]} | sed -re 's: \- graph.+::')
+		echo "$base / $step / $title" >> $par.log
 
 		for dom in $doms
 		do
-			echo "<tr><th name='title' $att>Param '$par' - ${tt[*]} - Domain $dom</th></tr>"
+			echo "<table>"
+			echo "<tr><th>Maps, selection of levels</th><th>Cross-sections and diagrams</th>"
+			att="colspan='2'"
+			if [ -n "$ref" ]
+			then
+				echo "<th>Maps for reference</th><th>Cross-sections and diagrams for ref</th>"
+				att="colspan='4'"
+			fi
+
+			echo "</tr>"
+
+			# rows with name attribute (fig for images, title for row header)
+			echo "<tr><th name='title' $att>Param '$par' - $title - Domain $dom</th></tr>"
 			echo "<tr>"
 
 			for typ in map hist mapdiff histdiff
 			do
-				fic=$loc/$typ$it${dom}_$par.png
+				fic=xxx$loc/$typ$it${dom}_$par.png_
+				[ -s $fic ] || fic=$loc/$typ$base${dom}_$par.png
 				[ -s $fic ] || continue
 
 				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+				printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
 			done
 
 			echo "</tr>"
 
 			cat $diags/step.html
 
-			for stat in bias rmse errx
+			[ $mapstat -eq 1 ] || continue
+
+			echo "<tr><th $att>Param '$par' (...) - min/max - Domain $dom</th></tr>"
+			echo "<tr>"
+
+			for typ in mapn mapx mapndiff mapxdiff
+			do
+				fic=xxx$loc/$typ$it${dom}_$par.png_
+				[ -s $fic ] || fic=$loc/$typ$base${dom}_$par.png
+				[ -s $fic ] || continue
+
+				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+				printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
+			done
+
+			echo "</tr>"
+
+			for stat in bias rmse errx dayx
 			do
 				echo "<tr><th colspan='2'>Param '$par' $stat - Domain $dom</th></tr>"
 				echo "<tr>"
 
 				for typ in map$stat hist$stat
 				do
-					fic=$loc/$typ$it${dom}_$par.png
+					fic=xxx$loc/$typ$it${dom}_$par.png_
+					[ -s $fic ] || fic=$loc/$typ$step${dom}_$par.png
 					[ -s $fic ] || continue
 
 					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+					printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
 				done
 
 				echo "</tr>"
 			done
-
-			echo "<tr><th colspan='2'>Param '$par' min/max - Domain $dom</th></tr>"
-			echo "<tr>"
-
-			for typ in mapn mapx
-			do
-				fic=$loc/$typ$it${dom}_$par.png
-				[ -s $fic ] || continue
-
-				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-			done
-
-			echo "</tr>"
 		done > $loc/idom.html
 
-		if grep -qE '<img .+ src=' $loc/idom.html
+		if grep -qE '<img .+ src=' $loc/idom.html && [ ! -s $loc/idom.html.save ]
 		then
 			cat $loc/idom.html
+			cp $loc/idom.html $loc/idom.html.save
 			echo "</table>"
-			break
 		fi
+	done < $loc/steps.txt > $loc/maph.html
 
-		echo "</table>"
-	done < $loc/steps.txt
-
+	rm -f $loc/idom.html.save
+	echo ".. HTML select (stat.html)" # with name attributes step and map
+	{
 	sed -re 's:TAG NAME:step:' -e "/TAG OPT/r $loc/steps.html" $diags/select.html
 	for dom in $doms
 	do
-		for stat in "" diff bias rmse errx
+		# same order as table images
+		for typ in map hist mapdiff histdiff mapn mapx mapndiff mapxdiff \
+			mapbias histbias maprmse histrmse maperrx histerrx mapdayx histdayx
 		do
-			for typ in map$stat hist$stat
-			do
-				fic=$loc/$typ${dom}_$par.html
-				[ -s $fic ] || continue
+			fic=$loc/$typ${dom}_$par.html
+			[ -s $fic ] || continue
 
-				sed -re 's:TAG NAME:map:' -e "/TAG OPT/r $fic" $diags/select.html
-			done
+			sed -re 's:TAG NAME:map:' -e "/TAG OPT/r $fic" $diags/select.html
 		done
 	done
+	} > $loc/stat.html
 
-	typd=("stat" "statv" "err" "errv" "score" "scorev" "scoret" "rmsevt")
+	echo ".. Stats and scores (score.html)"
+	typd=(stat statv err errv score scorev scorez scorevz scoret rmsevt)
 	titd=("Statistics of forecast" "Statistics of profile" "Statistics of forecast error" \
 		"Statistics of profile error" "Scores of forecasts" "Scores of profile" \
-		"Daily scores" "Daily RMSE")
+		"Scores of zonal mean" "Score of zonal mean - profile" "Daily scores" "Daily RMSE")
 	i=0
 	while [ $i -lt ${#typd[*]} ]
 	do
+		echo ${typd[i]} | grep -q score && th="<p>ref data (blue): $cmp</p>" || th=""
 		echo "<h2>${titd[i]} on domains</h2>
+$th
 <table>
 <tr>"
 
@@ -252,8 +270,10 @@ do
 		echo "</tr>
 </table>"
 		i=$((i+1))
-	done
-	} > $loc/$par.html
+	done > $loc/score.html
 
-	sed -re "s:TAG PAR:$par:" -e "/TAG BODY/r $loc/$par.html" $diags/par.html > $ficpar
+	echo ".. fill par template"
+	sed -re "s:TAG PAR:$par:" -e "/TAG MAP/r $loc/maph.html" \
+		-e "/TAG STAT/r $loc/stat.html" -e "/TAG SCORE/r $loc/score.html" \
+		$diags/par.html > $ficpar
 done

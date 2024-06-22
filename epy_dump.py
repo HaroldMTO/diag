@@ -4,7 +4,7 @@ import os
 
 def usage():
 	print("Syntax:\n\
-	epy_dump.py FILE -f frame|field_name -o FILEOUT [-h]\n\
+	epy_dump.py FILE -f frame|field_name -o FILEOUT [-prof] [-h]\n\
 \n\
 Description:\n\
 	Dump information (geometry) or field data from a file read by Epygram\n\
@@ -14,6 +14,7 @@ Arguments:\n\
 	frame: target information on the date and geometry of the fields in the file\n\
 	field_name: target access to the data of one field of the file\n\
 	FILEOUT: name of the (binary) file to write to\n\
+	-prof: activate simple profiling in this script\n\
 	-h: print this help and exit\n\
 \n\
 Details:\n\
@@ -28,6 +29,8 @@ spectral.\n")
 
 tag = ""
 fbin = ""
+prof = False
+
 args = os.sys.argv[1:]
 if len(args) == 0:
 	usage()
@@ -46,11 +49,19 @@ for i,arg in enumerate(args):
 		if fbin != "": exit("too many options, see usage")
 
 		fbin = args[i+1]
+	elif arg == "-prof":
+		prof = True
 	elif (tag == "" or arg != tag) and (fbin == "" or arg != fbin):
 		fname = arg
 
 import epygram
 import numpy
+import time
+import concurrent.futures as cf
+
+def sp2gp(f):
+	f.sp2gp()
+	return f
 
 epygram.init_env()
 
@@ -145,7 +156,9 @@ elif tag != "":
 		print(l)
 		exit()
 
+	if prof: t = os.times().elapsed
 	fields = a.readfields(tag)
+	if prof: print("reading time:",round(os.times().elapsed-t,3))
 	fnames = fields.listfields("FA")
 	fnoms = numpy.array(fnames)
 
@@ -171,6 +184,9 @@ elif tag != "":
 
 	finfo = True
 	ginfo = True
+	ffsp = list()
+
+	if prof: t1 = t2 = t3 = 0
 	for j in fnoms.argsort():
 		print("... field",j,fnoms[j])
 		ff = fields[j]
@@ -199,27 +215,64 @@ elif tag != "":
 			ginfo = False
 
 		if ff.spectral:
+			#ffsp.append(ff)
+			#continue
+
+			if prof: t = os.times().elapsed
 			splen = len(ff.data)
+			spsize = ff.data.size
 			ff.sp2gp()
 			if finfo:
-				print("Spectral/gridpoint sizes:",splen,ff.data.size)
-				finfo = False
+				if prof: t1 = t1+(os.times().elapsed-t)
+				print("Spectral/gridpoint sizes:",splen,spsize,ff.data.size)
+			if prof: t2 = t2+(os.times().elapsed-t)
 		else:
 			if finfo:
 				print("Gridpoint size:",ff.data.size)
-				finfo = False
 
 		data = ff.data
 		if (not islam):
 			data = data.compressed()
-			print("Reduced gridpoints:",data.size)
+			if finfo:
+				print("Reduced gridpoints:",data.size)
+				finfo = False
 
 		if con != None:
+			if prof: t = os.times().elapsed
 			data.tofile(con)
+			if prof: t3 = t3+(os.times().elapsed-t)
 
 	# (debug) mark end of data with one known integer value
 	if con != None:
+		if len(ffsp) > 0:
+			#exe = cf.ThreadPoolExecutor(max_workers=4)
+			if prof: t = os.times().elapsed
+			for ff in ffsp:
+				splen = len(ff.data)
+				ff.sp2gp()
+				if finfo:
+					if prof: t1 = t1+(os.times().elapsed-t)
+					print("Spectral/gridpoint sizes:",splen,ff.data.size,"- fields:",len(ffsp))
+					finfo = False
+				#f = exe.submit(ff.sp2gp)
+				#f.result()
+
+			#with exe:
+			#	f = exe.submit(sp2gp,ffsp)
+			#	f.result()
+			if prof: t2 = t2+(os.times().elapsed-t)
+
+			for ff in ffsp:
+				data = ff.data
+				if (not islam): data = data.compressed()
+				if prof: t = os.times().elapsed
+				data.tofile(con)
+				if prof: t3 = t3+(os.times().elapsed-t)
+
 		numpy.array(nf).tofile(con)
 
 if con != None:
 	con.close()
+
+if prof: print("times sp2gp(1)/sp2gp/tofile:",round(t1,3),round(t2,3),round(t3,3))
+

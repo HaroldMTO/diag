@@ -16,7 +16,7 @@ function avance(val)
 	step0 = steps[0];
 	i = step0.selectedIndex;
 
-	s = step0.options[i].text
+	s = step0.options[i].text;
 
 	switch (val) {
 	case -2:
@@ -36,9 +36,7 @@ function avance(val)
 
 	for (k=0;k<imgs.length;k++) imgs[k].src = maps[k].options[j].text;
 
-	for (k=0;k<titles.length;k++) {
-		titles[k].innerHTML = titles[k].innerHTML.replace(s,step0.options[j].text);
-	}
+	for (k=0;k<titles.length;k++) titles[k].innerHTML = step0.options[j].text;
 
 	steps[0].options[i].selected = false;
 	steps[0].options[j].selected = true;
