@@ -7,6 +7,8 @@ library(mffield)
 
 Gvp0 = 101325
 
+source(sprintf("%s/plot.R",Gdiag))
+
 readDom = function(filename,domd=list())
 {
 	df = read.table(filename,header=TRUE)
@@ -186,11 +188,12 @@ setDiagData = function(grid,eta,ilev,data)
 
 getFrame = function(file)
 {
-	out = system(sprintf("epy_dump.py %s -f frame -o %s",file,Gficbin),intern=TRUE)
+	ficbin = tempfile(fileext=".bin")
+	out = system(sprintf("epy_dump.py %s -f frame -o %s",file,ficbin),intern=TRUE)
 	out = grep("dimensions",out,ignore.case=TRUE,value=TRUE)
 	cat(out[1],"\n")
 
-	con = file(Gficbin,"rb")
+	con = file(ficbin,"rb")
 	dims = readBin(con,"integer",5,size=8)
 
 	# global (Gauss grid) or LAM (Cartesian grid)
@@ -226,12 +229,13 @@ getFrame = function(file)
 	if (gauss) gem = readBin(con,"numeric",3)
 
 	close(con)
+	file.remove(ficbin)
 
 	if (gauss) {
-		nlat = length(nlong)
-		theta = 90-180*(seq(nlat)-.5)/nlat
+		theta = equiLat(length(nlong))
 		g4 = new("GaussGrid",lat=lats,long=longs,nlong=nlong,pole=gem[2:3],stretch=gem[1],
 			theta=theta)
+		g4@theta = csLat(g4)
 
 		#frame = list(nlat=nlat,nwave=dims[2],nlevel=nl,npdg=ngp,nlong=nlong,theta=theta,
 		#	lat=lats,long=longs,eta=eta,base=fc@base,step=fc@step,mucen=gem[2],locen=gem[3],
@@ -250,6 +254,28 @@ getFrame = function(file)
 	frame
 }
 
+FApattern = function(ltype,faname,ilev,selev=FALSE)
+{
+	if (ltype == "-") {
+		patt = faname
+	} else if (length(ilev) > 1) {
+		# selection requires same nlevel (interpolation impossible)
+		if (selev) {
+			patt = paste(sprintf("%03d",ilev),collapse="|")
+			patt = sprintf("%s(%s)%s",ltype,patt,faname)
+		} else {
+			patt = sprintf("%s\\d+%s",ltype,faname)
+		}
+	} else if (ltype == "S") {
+		patt = sprintf("S%03d%s",ilev,faname)
+	} else {
+		cat("--> level type not 'S' for reading specified level\n")
+		return(NULL)
+	}
+
+	patt
+}
+
 formatStep = function(step,hour="")
 {
 	if (step %% 3600 == 0) {
@@ -262,7 +288,7 @@ formatStep = function(step,hour="")
 	}
 }
 
-getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE)
+getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE,mc.cores=1)
 {
 	stopifnot(! is.null(frlow$ilev))
 
@@ -279,7 +305,8 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE)
 	npdg = sum(grid@nlong)
 
 	lread = TRUE
-	if (file.exists(fsave)) {
+	# no, don't test alternative file
+	if (FALSE && file.exists(fsave)) {
 		ilev = 0
 		fic.save = ""
 		noms = load(fsave)
@@ -299,7 +326,10 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE)
 	}
 
 	if (file.exists(fsave) && lread) {
-		load(fsave)
+		ilev = 0
+		fic.save = ""
+		noms = load(fsave)
+		stopifnot(all(c("data","ilev","step","fic.save") %in% noms))
 
 		# read data if different
 		lread = ! identical(ilev,frlow$ilev) || fic.save != fic || dim(data)[1] != npdg
@@ -317,89 +347,100 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE)
 
 	if (lread) {
 		grid = frame$g4
-		data <- getGPFields(fic,param,sum(grid@nlong))
+		data = getGPFields(fic,param,sum(grid@nlong))
 	}
 	stopifnot(dim(data)[1] == length(grid))
 
 	ilev = frlow$ilev
+	selev = FALSE
 	if (dim(data)[2] == 1) {
 		eta = 1
 	} else if (dim(data)[2] == length(ilev)) {
 		eta = frlow$eta[ilev]
 	} else {
+		# data contain a selection of levels (ilev, built by way of param, ie pattern)
+		selev = TRUE
 		# data should have full (or reduced) nlev (if not, we don't know its levels)
 		eta = frame$eta
 		if (! is.null(frame$ilev)) eta = eta[frame$ilev]
+		stopifnot(dim(data)[2] == length(eta))
 	}
-	stopifnot(dim(data)[2] == length(eta))
 
 	f = new("Field",grid=grid,eta=eta)
 	f = setDataPart(f,data)
 	if (! lread) return(f)
 
-	h = hist(f,plot=FALSE)
-	if (length(which(h$counts > 0)) == 2) {
-		stopifnot(length(table(f)) == 2)
-		meth = "ppp"
-	} else {
-		meth = "linear"
+	# ppp is just for fun...
+	meth = "linear"
+	if (length(f) < 2e6) {
+		h = hist(f,plot=FALSE)
+		if (length(which(h$counts > 0)) == 2) {
+			stopifnot(length(table(f)) == 2)
+			meth = "ppp"
+		}
 	}
 
 	if (sum(grid@nlong) != npdg) {
 		nlat = length(grid@nlong)
-		cat("--> interpolation from",sum(grid@nlong),nlat,"gridpoints/lat - method:",
+		cat("--> interpolation from",sum(grid@nlong),nlat,"grid-points/lats - method:",
 			meth,"\n")
-		it = system.time(f <- interp(f,frlow$g4,meth))
-		cat("interpolation time:",it,"\n")
+		it = system.time(f <- interp(f,frlow$g4,meth,mc.cores))
+		if (prof) cat("interpolation time:",it,"\n")
 	}
 
 	if ("ind" %in% names(frlow)) {
-		cat("--> selection of gridpoints:",length(frlow$g4),"/",npdg,"\n")
+		cat("--> selection of grid-points:",length(frlow$g4),"/",npdg,"\n")
 		f = setDataPart(f,f[frlow$ind,,drop=FALSE])
 	}
 
-	if (dim(f)[2] > 1 && length(f@eta) != length(ilev)) {
+	# if selev, dim(f)[2] > 1 && length(f@eta) != length(ilev)
+	if (selev) {
 		cat("--> interpolation from",length(f@eta),"levels - method:",meth,"\n")
-		f = interpAB(f,frlow$eta[ilev],meth)
+		f = interpAB(f,frlow$eta[ilev],method="quad")
 	}
 
 	data = getDataPart(f)
 	step = fc@step
 	fic.save = fic
 	if (! file.exists(dirname(fsave))) dir.create(dirname(fsave))
-	save("data","ilev","step","fic.save",file=fsave)
+	st <- system.time(save("data","ilev","step","fic.save",file=fsave))
+	if (prof) cat("caching time:",st,"\n")
 
 	f
 }
 
 getGPFields = function(file,field,npdg)
 {
-	cmd = sprintf("epy_dump.py %s -f '%s' -o %s",file,field,Gficbin)
+	ficbin = tempfile(fileext=".bin")
+	cmd = sprintf("epy_dump.py %s -f '%s' -o %s",file,field,ficbin)
 	rt = system.time(out <- system(cmd,intern=TRUE))
-	cat("FAreading time:",rt,"\n")
+	if (prof) cat("FAreading time:",rt,"\n")
 	out = grep("date|time|step|gridpoint size",out,ignore.case=TRUE,value=TRUE)
 	cat(paste(out,collapse=", "),"\n")
 
-	con = file(Gficbin,"rb")
+	con = file(ficbin,"rb")
 	nl = readBin(con,"integer",1,size=8)
 	stopifnot(length(nl) == 1)
 
 	data = matrix(nrow=npdg,ncol=nl,dimnames=list(NULL,seq(nl)))
 	rt = system.time(for (j in seq(nl)) data[,j] = readBin(con,"numeric",npdg))
-	cat("Binreading time:",rt,"\n")
+	if (prof) cat("Binreading time:",rt,"\n")
 	stopifnot(nl == readBin(con,"integer",1,size=8))
 	close(con)
+	file.remove(ficbin)
 
 	data
 }
 
 getSPFields = function(file,field,nwave)
 {
-	system(sprintf("epy_dump.py %s -f %s -o %s",file,field,Gficbin),ignore.stdout=TRUE)
-	con = file(Gficbin,"rb")
+	ficbin = tempfile(fileext=".bin")
+	system(sprintf("epy_dump.py %s -f %s -o %s",file,field,ficbin),ignore.stdout=TRUE)
+	con = file(ficbin,"rb")
 	nsp2 = readBin(con,"integer",1,size=8)
 	data = readBin(con,"numeric",nsp2)
 	close(con)
+	file.remove(ficbin)
 
 	stopifnot(nsp2 == nwave*(nwave-1))
 
@@ -474,178 +515,6 @@ dilat = function(grid)
 	ddm/max(ddm[1:(nlat/2)])
 }
 
-prettyBreaks = function(x,breaks="Sturges",nmin=5,n=8,crop=FALSE,split=FALSE)
-{
-	h = hist(x,breaks,plot=FALSE)
-
-	if (is.character(breaks)) {
-		stopifnot(1 < nmin && nmin <= n)
-
-		have = h$counts > 0
-		nbin = length(h$counts)
-
-		# case for binary values (e.g. 0/1): 2 non-empty bins that are the extreme ones
-		if (length(which(have)) == 2 && all(which(have) %in% c(1,nbin))) {
-			h = hist(x,2,plot=FALSE)
-			cat("--> only 2 populated extreme bins, try to limit to 2:",length(h$counts),"\n")
-		} else if (nbin > 1.25*n) {
-			h = hist(x,n,plot=FALSE)
-			if (length(h$counts) > 1.25*n) {
-				cat("--> failed to limit bins from",length(which(have)),nbin,"to",n,":",
-					length(h$counts),"\n")
-			}
-
-			# still too many bins: try n-1
-			if (FALSE && length(h$counts) > 1.2*n && length(which(h$counts > 0)) > 2) {
-				h = hist(x,n-1,plot=FALSE)
-				cat("--> try to limit bins from",length(which(h$counts > 0)),
-					length(h$counts),"to",n,":",length(h$counts),"\n")
-			}
-		}
-
-		if (length(which(h$counts > 0)) > 2 && length(h$counts) < nmin) {
-			hh = hist(x,nmin,plot=FALSE)
-			cat("--> too few bins, try minimum of",nmin,"bins:",length(hh$counts),"\n")
-			# yes, 0s can be fewer with more bins...
-			if (length(which(hh$counts == 0)) <= length(which(h$counts == 0))) h = hh
-		}
-	}
-
-	if (split && length(h$counts) > 2) {
-		indx = order(h$density,decreasing=TRUE)
-		dy = diff(h$density[indx])
-		ix = which.min(dy)
-		if (length(which(h$counts > 0)) > 1 && ix < length(which(h$density > 0)) &&
-			(r=h$density[indx[ix]]/h$density[indx[ix+1]]) > 3*ix) {
-			# n is 3, 4 or 5 (ie 2, 3 or 4)
-			nb = 1+min(4,as.integer(sqrt(r/(3*ix))+1))
-			br = seq(h$breaks[indx[1]],h$breaks[indx[1]+1],length.out=nb)
-			if (nb > 3) cat("--> splitting bin",ix,"/",length(h$counts),"into",nb,"\n")
-			h = hist(x,unique(sort(c(h$breaks,br))),plot=FALSE)
-		}
-	}
-
-	if (crop && length(h$counts) > 2) {
-		br = h$breaks
-		dxn = diff(br[1:2])
-		dxx = diff(br[-(1:(length(br)-2))])
-		# crop the extreme bins by 1/5-th of their width or by their half width
-		if (min(x) > br[2]-dxn/5 && max(x) < br[length(br)-1]+dxx/5) {
-			h$breaks[1] = br[2]-dxn/5
-			h$breaks[length(br)] = br[length(br)-1]+dxx/5
-		} else if (min(x) > br[2]-dxn/2 && max(x) < br[length(br)-1]+dxx/2) {
-			h$breaks[1] = br[2]-dxn/2
-			h$breaks[length(br)] = br[length(br)-1]+dxx/2
-		}
-	}
-
-	# values in last bin are stuck to left bound (if right=F, may be?)
-	if (length(h$counts) > 1 && h$breaks[length(h$breaks)-1] == max(x,na.rm=TRUE)) {
-		cat("--> get rid of the last bin",length(h$breaks),h$counts[length(h$counts)],"\n")
-		h = hist(x,h$breaks[-length(h$breaks)])
-	}
-
-	h
-}
-
-mapxy = function(dom,...)
-{
-	if (dom@proj == "-") {
-		l = map(xlim=dom@xlim,ylim=dom@ylim,...)
-		p = .Last.projection()
-		if (p$projection != "") {
-			cat("--> reset projection\n")
-			p = .Last.projection(list(projection="",parameters=NULL,orientation=NULL))
-			stopifnot(p$projection == "")
-		}
-
-		# axes for rectangular projection only
-		axis(1)
-		axis(2)
-	} else {
-		l = map(projection=dom@proj,parameters=dom@param,xlim=dom@xlim,ylim=dom@ylim,...)
-	}
-
-	l
-}
-
-mapdom = function(dom,points,data,main=NULL,breaks="Sturges",palette="YlOrRd",pch=20,
-	cex=.6,ppi=72,quiet=FALSE,...)
-{
-	if (par("mar")[1] > 2.5 || par("mar")[4] < 2.5) stop(paste(par("mar"),collapse=" "))
-	if (ppi > 144) stop("ppi > 144")
-
-	l = mapxy(dom,mar=par("mar"),new=TRUE)
-	box()
-
-	h = prettyBreaks(data,breaks,crop=TRUE)
-
-	f = par("fin")
-	npmax = as.integer(min(prod(f*ppi/(4*cex)),.Machine$integer.max))
-	if (length(data) < npmax/100) {
-		cat("--> very few points, magnify plotting symbol (x2)\n")
-		cex = 2*cex
-	} else if (length(data) > 1.2*npmax) {
-		cex = max(.2,round(cex*sqrt(npmax/length(data)),3))
-		npmax = as.integer(min(prod(f*ppi/(4*cex)),.Machine$integer.max))
-	}
-
-	if (length(data) > 1.2*npmax) {
-		if (! quiet) {
-			cat("--> reducing xy points from",length(data),"to",npmax,"and cex to",cex,"\n")
-		}
-
-		ind = select(points,npmax)
-
-		b2 = cut(data[ind],h$breaks)
-
-		ilost = which(h$counts > 0 & table(b2) == 0)
-		if (length(ilost) > 0) {
-			b = cut(data,h$breaks)
-			ind1 = which(b %in% levels(b)[ilost])
-			ind = c(ind,ind1)
-			stopifnot(all(! duplicated(ind)))
-			if (! quiet) {
-				cat("--> selecting back",length(ind1),"lost points in",length(ilost),
-					"data bins\n")
-			}
-		}
-
-		points = points[ind]
-		data = data[ind]
-	}
-
-	if (cex < .2) cex = .2
-
-	br = h$breaks
-
-	ind = findInterval(data,br,rightmost.closed=TRUE)
-	rev = regexpr("\\+$",palette) < 0
-	cols = hcl.colors(length(br),sub("\\+$","",palette),rev=rev)
-
-	tind = table(ind)
-
-	if (dom@proj == "-") {
-		for (i in as.integer(names(sort(tind,decreasing=TRUE)))) {
-			ii = which(ind == i)
-			points(points@long[ii],points@lat[ii],col=cols[ind[ii]],pch=pch,cex=cex,...)
-		}
-	} else {
-		for (i in as.integer(names(sort(tind,decreasing=TRUE)))) {
-			ii = which(ind == i)
-			mp = mapproject(points@long[ii],points@lat[ii])
-			points(mp$x,mp$y,col=cols[ind],pch=pch,cex=cex,...)
-		}
-	}
-
-	levels = sprintf("% .3g",br)
-	if (any(duplicated(levels))) levels = sprintf("% .4g",br)
-	DOPfill.legend(levels,col=cols)
-
-	lines(l)
-	title(main)
-}
-
 mapsegments = function(dom,lat,long,...)
 {
 	# S->N cross-section
@@ -655,16 +524,47 @@ mapsegments = function(dom,lat,long,...)
 	map.grid(c(dom@xlim[1],dom@xlim[2],lat,lat),ny=1,labels=FALSE,pretty=FALSE,...)
 }
 
-mapdom2 = function(dom,points,zx,zy,main=NULL,breaks="Sturges",colvec=TRUE,length=.05,
-	angle=15,ppi=6,quiet=FALSE,...)
+mapdom = function(dom,grid,ind,data,main=NULL,scale=TRUE,mar=c(2,2,3,5),mgp=c(2,1,0),...)
 {
-	if (ppi > 96) stop("ppi > 96\n")
-
-	l = mapxy(dom,mar=par("mar"),new=TRUE)
+	# mar must be set before calling map AND passed to map
+	# (because map resets mar internally and resets it on exit: this is then fake mar!)
+	par(mar=mar,mgp=mgp)
+	l = mapxy(dom,mar=mar,new=TRUE)
 	box()
 
-	f = par("fin")
-	npmax = as.integer(min(prod(f*ppi),.Machine$integer.max))
+	if (scale) {
+		ymax = max(abs(data),na.rm=TRUE)
+		scal = 10^-round(log10(ymax/1.5))
+		if (.001 <= scal && scal < 1 || is.infinite(scal)) scal = 1
+		if (scal != 1) {
+			data = scal*data
+			if (length(main) > 0) {
+				main[1] = sprintf("%s - scaling: %g",main[1],scal)
+			} else {
+				message(sprintf("data scaling: %g",scal))
+			}
+		}
+	}
+
+	mappoints(grid,ind,data,...)
+
+	lines(l)
+	title(main)
+}
+
+mapdom2 = function(dom,points,zx,zy,main=NULL,colvec=TRUE,length=.05,angle=15,ppi=6,
+	mar=c(2,2,3,5),mgp=c(2,1,0),quiet=FALSE,...)
+{
+	# mar must be set before calling map AND passed to map
+	# (because map resets mar internally and resets it on exit: this is then fake mar!)
+	par(mar=mar,mgp=mgp)
+	l = mapxy(dom,mar=mar,new=TRUE)
+	box()
+
+	if (ppi > 96) stop("ppi > 96")
+
+	nppi = prod(par("fin"))*ppi
+	npmax = min(as.integer(nppi),.Machine$integer.max)
 
 	if (length(zx) > 1.2*npmax) {
 		if (! quiet) cat("--> reducing xy2 plot from",length(zx),"to",npmax,"points\n")
@@ -727,36 +627,14 @@ mapdom2 = function(dom,points,zx,zy,main=NULL,breaks="Sturges",colvec=TRUE,lengt
 	if (colvec) {
 		levels = sprintf("% .3g",br)
 		if (any(duplicated(levels))) levels = sprintf("% .4g",br)
-		DOPfill.legend(levels,col=palette)
+		maplegend(levels,col=palette)
 	}
 
 	lines(l)
 	title(main)
 }
 
-DOPfill.legend = function(breaks,col,...)
-{
-	u = par("usr")
-	p = par("plt")
-
-	width = (1-p[2])/6*diff(u[1:2])/diff(p[1:2])
-	x = u[2]+width/3
-
-	nl = length(breaks)
-	height = diff(u[3:4])
-	dy = height/(nl-1)
-	y = u[3]
-	ybas = y + dy*(seq(nl-1)-1)
-	yhaut = ybas + dy
-
-	rect(x,ybas,x+width,yhaut,col=col,border=NA,xpd=TRUE)
-
-	op = par(las=2,yaxt="s")
-	axis(4,c(ybas[1],yhaut),breaks,tick=FALSE,pos=x+width/12,mgp=c(1,.7,0),...)
-	par(op)
-}
-
-hist.annot = function(data,nmin=10,n=20,split=TRUE,...)
+hist.annot = function(data,nmin=10,n=20,split=TRUE,info=TRUE,...)
 {
 	if (par("mar")[1] < 1.5 || par("mar")[4] > 3) stop(paste(mar,collapse=" "))
 
@@ -770,10 +648,14 @@ hist.annot = function(data,nmin=10,n=20,split=TRUE,...)
 		y = max(h$density)
 	}
 
+	# print min/max under the plot
 	znx = range(data)
 	text(znx[1],-.02*y,sprintf("| %.3g",min(data,na.rm=TRUE)),adj=0,col=4)
 	text(znx[2],-.02*y,sprintf("%.3g |",max(data,na.rm=TRUE)),adj=1,col=4)
 
+	if (! info) return(NULL)
+
+	# print mean and sd near the top of the plot
 	m = mean(data,na.rm=TRUE)
 
 	s = sd(data,na.rm=TRUE)
@@ -786,67 +668,95 @@ hist.annot = function(data,nmin=10,n=20,split=TRUE,...)
 		text(m-dx,.97*y,sprintf("m: %.3g",m),adj=1,col=4)
 		text(m-dx,.92*y,sprintf("m/sd: %.3g",m/s),adj=1,col=4)
 	} else {
-		text(m+dx,.97*y,sprintf("m: %.3g",m),adj=0,...)
+		text(m+dx,.97*y,sprintf("m: %.3g",m),adj=0,col=4)
 		text(m+dx,.92*y,sprintf("m/sd: %.3g",m/s),adj=0,col=4)
 	}
 }
 
-plotv = function(x,y,z,breaks,ylim=rev(range(y,finite=TRUE)),xaxs="i",yaxs="i",
-	palette="YlOrRd",long=FALSE,...)
-{
-	if (par("mar")[1] > 2.5 || par("mar")[4] < 2) stop("mar does not fit")
-
-	if (missing(breaks) || length(breaks) < 2) {
-		breaks = prettyBreaks(z,crop=TRUE)$breaks
-		dbr = diff(range(breaks))*.Machine$double.eps
-		stopifnot(all(min(breaks)-dbr <= z & z <= max(breaks)+dbr))
-	}
-
-	if (length(breaks) == 2) breaks = c(breaks,breaks[2]+diff(breaks))
-
-	rev = regexpr("\\+$",palette) < 0
-	cols = hcl.colors(length(breaks)-1,sub("\\+$","",palette),rev=rev)
-	if (long) {
-		i = which(diff(x) < 0)
-		if  (length(i) > 0) x[-(1:i)] = x[-(1:i)]+360
-	}
-
-	image(x,y,z,ylim=ylim,col=cols,breaks=breaks,xaxs=xaxs,yaxs=yaxs,...)
-	lev = sprintf("% .3g",breaks)
-	DOPfill.legend(lev,col=cols)
-}
-
 plotsectiongeo = function(field,dom,main,...)
 {
-	longm = mean(dom@xlim)
-	latm = mean(dom@ylim)
-
-	#br = prettyBreaks(field,crop=TRUE)$breaks
+	longm = round(mean(dom@xlim),1)
+	latm = round(mean(dom@ylim),1)
 
 	yz = sectiongeo(field,longm,dom@ylim)
 	stopifnot(all(is.finite(yz$data)))
 
-	main[2] = sprintf("S->N section, longitude %g",round(longm,1))
+	main[2] = sprintf("S->N section, longitude %g",longm)
 	plotv(yz$lats,field@eta,yz$data,main=main,xlab="",ylab="",...)
+	stopifnot(all(abs(range(yz$lats)) <= 90))
 
 	xz = sectiongeo(field,dom@xlim,latm)
 	stopifnot(all(is.finite(xz$data)))
 
-	main[2] = sprintf("W->E section, latitude %g",round(latm,1))
+	main[2] = sprintf("W->E section, latitude %g",latm)
 	plotv(xz$longs,field@eta,xz$data,main=main,xlab="",ylab="",long=TRUE,...)
+	if (any(abs(range(xz$longs)) > 180)) cat("--> longs:",rangeLong(xz$longs),"\n")
 }
 
-mapexi = function(f,grmap,desc,doms,prefix=character(),main,np=4,prob=seq(0,100)/100,
-	mnx=TRUE,force=FALSE,...)
+mapext = function(d4,xy,prefix,dom,desc,ext,main,mc.cores=1,...)
+{
+	if (ext == "min") {
+		pal = "Heat+"
+	} else if (ext == "max") {
+		pal = "Heat"
+	} else {
+		stop(sprintf("function '%s' must be min or max",ext))
+	}
+
+	fun = get(ext)
+	ficpng = sprintf("%s/map%s%s%s_%s.png",pngd,substr(ext,3,3),prefix,dom,desc$symbol)
+	if (file.exists(ficpng)) return()
+
+	nl = dim(xy)[2]
+	il = (nl+1)%/%2
+
+	png(ficpng)
+	par(mfrow=c(2,2),cex=.7)
+
+	par(Gparm)
+	if (mc.cores == 1) {
+		data = apply(xy[,1:il],1,fun)
+	} else {
+		lxy = mclapply(seq(dim(xy)[1]),function(i) fun(xy[i,1:il]),mc.cores=mc.cores)
+		data = simplify2array(lxy)
+	}
+
+	tt[2] = sprintf("%s %s. of lev. [1,%d]",main,ext,il)
+	mapdom(d4,xy@grid,xy@ind,data,main=tt,palette=pal,...)
+
+	par(mar=Gparh$mar)
+	hist.annot(data,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
+
+	par(Gparm)
+	if (mc.cores == 1) {
+		data = apply(xy[,-(1:il)],1,fun)
+	} else {
+		lxy = mclapply(seq(dim(xy)[1]),function(i) fun(xy[i,-(1:il)]),mc.cores=mc.cores)
+		data = simplify2array(lxy)
+	}
+
+	tt[2] = sprintf("%s %s. of lev. [%d,%d]",main,ext,il+1,nl)
+	mapdom(d4,xy@grid,xy@ind,data,main=tt,palette=pal,...)
+
+	par(mar=Gparh$mar)
+	stopifnot(all(par("mar") == Gparh$mar))
+	hist.annot(data,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
+
+	dev.off()
+}
+
+mapexi = function(f,desc,doms,prob=seq(0,100)/100,prefix=character(),main,np=4,
+	mnx=TRUE,force=FALSE,mc.cores=1,...)
 {
 	nl = length(f@eta)
 	qv = array(dim=c(length(prob),nl,length(doms)),dimnames=list(NULL,seq(nl),names(doms)))
 
 	for (i in seq(along=doms)) {
 		d4 = doms[[i]]
+		dom = names(doms)[i]
 		ind = inDomain(f@grid,d4)
 		if (length(which(ind)) < np) {
-			cat("--> less than",np,"points in domain",names(doms)[i],"\n")
+			cat("--> less than",np,"points in domain\n")
 			next
 		}
 
@@ -854,15 +764,11 @@ mapexi = function(f,grmap,desc,doms,prefix=character(),main,np=4,prob=seq(0,100)
 			# no domain, no zoom
 			domin = d4
 			xy = f
-			if (! is.null(grmap)) {
-				xy@grid = grmap
-				xy = setDataPart(xy,f[grmap@ind,,drop=FALSE])
-			}
 		} else {
 			pts = f@grid[ind]
 			domin = new("Domain",long=pts@long,lat=pts@lat,proj=d4@proj,param=d4@param)
 			if (area(domin,d4) < .1) {
-				cat("--> area too small for domain",names(doms)[i],"\n")
+				cat("--> area too small for domain\n")
 				next
 			}
 
@@ -870,114 +776,79 @@ mapexi = function(f,grmap,desc,doms,prefix=character(),main,np=4,prob=seq(0,100)
 		}
 
 		stopifnot(all(is.finite(xy)))
-		qv[,,i] = apply(xy,2,quantile,prob=prob)
+		#qv[,,i] = apply(xy,2,quantile,prob=prob)
+		lqv = mclapply(seq(dim(xy)[2]),function(i) quantile(xy[,i],prob),mc.cores=mc.cores)
+		qv[,,i] = simplify2array(lqv)
 
 		if (length(prefix) == 0) next
 
-		dom = names(doms)[i]
-		cat(".. domain:",dom,"- points/total:",length(xy@grid),dim(f)[1],"\n")
+		cat(".. domain:",dom,"- points/total:",dim(xy)[1],dim(f)[1],"\n")
 
 		ficpng = sprintf("%s/map%s%s_%s.png",pngd,prefix,dom,desc$symbol)
-		if (file.exists(ficpng) && ! force) next
+		if (! file.exists(ficpng) || force) {
+			tt = main
+			png(ficpng)
 
-		png(ficpng)
+			if (nl == 1) {
+				op = par(c(Gparm,list(cex=.8)))
+				mapdom(d4,xy@grid,xy@ind,xy[,1],main=tt,palette=desc$palette,ppi=96,...)
+			} else {
+				op = par(c(Gparm,list(mfrow=c(2,2),cex=.7)))
 
-		tt = main
-
-		if (nl == 1) {
-			op = par(c(Gparm,list(cex=.8)))
-			mapdom(doms[[i]],xy@grid,xy[,1],main=tt,palette=desc$palette,...)
-		} else {
-			op = par(c(Gparm,list(mfrow=c(2,2),cex=.7)))
-
-			# be careful of nl=2...
-			indl = as.integer(seq(1,nl,length.out=min(4,nl)))
-			if (length(Gindl) == 2) indl = c(1,Gindl,nl)
-			for (il in indl) {
-				tt[2] = sprintf("%s level %d (eta %g)",main[2],il,round(f@eta[il],2))
-				mapdom(doms[[i]],xy@grid,xy[,il],main=tt,palette=desc$palette,
-					quiet=il!=indl[1],...)
-				mapsegments(domin,lat=mean(domin@ylim),long=mean(domin@xlim),col="darkgrey")
+				# be careful of nl=2...
+				indl = as.integer(seq(1,nl,length.out=min(4,nl)))
+				if (length(Gindl) == 2) indl = c(1,Gindl,nl)
+				pt = system.time(for (il in indl) {
+					tt[2] = sprintf("%s lev %d (eta %g)",main[2],il,round(f@eta[il],2))
+					mapdom(d4,xy@grid,xy@ind,xy[,il],main=tt,palette=desc$palette,quiet=TRUE,...)
+					mapsegments(domin,lat=mean(domin@ylim),long=mean(domin@xlim),col="darkgrey")
+				})
+				if (prof) cat("map time:",pt,"\n")
 			}
-		}
 
-		dev.off()
+			dev.off()
+		}
 
 		ficpng = sprintf("%s/hist%s%s_%s.png",pngd,prefix,dom,desc$symbol)
+		if (! file.exists(ficpng) || force) {
+			tt[2] = main[2]
+			png(ficpng)
 
-		png(ficpng)
+			if (nl == 1) {
+				op = par(c(Gparh,list(cex=.8)))
+				hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
+			} else {
+				op = par(c(Gparm,list(mfcol=c(2,2)),cex=.7))
+				st = system.time(plotsectiongeo(f,d4,main=desc$longname,palette=desc$palette))
+				if (prof) cat("section time:",st,"\n")
 
-		tt[2] = main[2]
+				par(mar=Gparh$mar)
+				hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
+				plotbv(qv[,,i],xy@eta,main=tt[1],xlab="",ylab="",ylim=rev(range(xy@eta)))
+				abline(v=0,col="darkgrey",lty=2)
+			}
 
-		if (nl == 1) {
-			op = par(c(Gparh,list(cex=.8)))
-			hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
-		} else {
-			op = par(c(Gparm,list(mfcol=c(2,2)),cex=.7))
-			plotsectiongeo(f,d4,main=desc$longname,palette=desc$palette)
-
-			par(mar=Gparh$mar)
-			hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
-			plotbv(qv[,,i],xy@eta,main=tt[1],xlab="",ylab="",ylim=yeta)
-			abline(v=0,col="darkgrey",lty=2)
+			dev.off()
 		}
-
-		dev.off()
 
 		if (! mnx || nl < 4) next
 
-		il = (nl+1)%/%2
-
-		ficpng = sprintf("%s/mapn%s%s_%s.png",pngd,prefix,dom,desc$symbol)
-
-		png(ficpng)
-		op = par(mfrow=c(2,2),cex=.7)
-		par(Gparm)
-		datan = apply(xy[,1:il],1,min)
-		tt[2] = sprintf("%s min. of lev. [1,%d]",main[2],il)
-		mapdom(d4,xy@grid,datan,main=tt,palette="Heat+",...)
-		par(mar=Gparh$mar)
-		hist.annot(datan,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-
-		par(Gparm)
-		datan = apply(xy[,-(1:il)],1,min)
-		tt[2] = sprintf("%s min. of lev. [%d,%d]",main[2],il+1,nl)
-		mapdom(d4,xy@grid,datan,main=tt,palette="Heat+",...)
-		par(mar=Gparh$mar)
-		stopifnot(all(par("mar") == Gparh$mar))
-		hist.annot(datan,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-		dev.off()
-
-		ficpng = sprintf("%s/mapx%s%s_%s.png",pngd,prefix,dom,desc$symbol)
-
-		png(ficpng)
-		op = par(mfrow=c(2,2),cex=.7)
-		par(Gparm)
-		datax = apply(xy[,1:il],1,max)
-		tt[2] = sprintf("%s max. of lev. [1,%d]",main[2],il)
-		mapdom(d4,xy@grid,datax,main=tt,palette="Heat",...)
-		par(mar=Gparh$mar)
-		hist.annot(datax,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-
-		par(Gparm)
-		datax = apply(xy[,-(1:il)],1,max)
-		tt[2] = sprintf("%s max. of lev. [%d,%d]",main[2],il+1,nl)
-		mapdom(d4,xy@grid,datax,main=tt,palette="Heat",...)
-		par(mar=Gparh$mar)
-		hist.annot(datax,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-		dev.off()
+		et = system.time(mapext(d4,xy,prefix,dom,desc,ext="min",main[2],mc.cores=mc.cores,...))
+		if (prof) cat("extreme time:",et,"\n")
+		mapext(d4,xy,prefix,dom,desc,ext="max",main[2],mc.cores=mc.cores,...)
 	}
 
 	qv
 }
 
-mapex2 = function(u,v,doms,prefix=NULL,main,np=4,palette,...)
+mapex2 = function(u,v,doms,prefix=NULL,main,np=4,palette,force=FALSE,...)
 {
 	nl = length(u@eta)
 	qv = array(dim=c(101,nl,length(doms)),dimnames=list(NULL,seq(nl),names(doms)))
 
 	for (i in seq(along=doms)) {
 		d4 = doms[[i]]$d4
+		dom = names(doms)[i]
 		ind = inDomain(u@grid,d4)
 		if (length(which(ind)) < np) next
 
@@ -1001,138 +872,57 @@ mapex2 = function(u,v,doms,prefix=NULL,main,np=4,palette,...)
 
 		if (is.null(prefix)) next
 
-		dom = names(doms)[i]
 		tt = "u/v wind"
 		cat(".. domain:",dom,"\n")
 
 		ficpng = sprintf("%s/map%s%s_ff.png",pngd,prefix,dom)
-		if (file.exists(ficpng)) next
+		if (! file.exists(ficpng) || force) {
+			png(ficpng)
 
-		png(ficpng)
+			if (nl == 1) {
+				op = par(c(Gparm,list(cex=.8)))
+				mapdom2(d4,x,x,y,main=main,...)
+			} else {
+				op = par(c(Gparm,list(mfcol=c(2,2),cex=.7)))
 
-		if (nl == 1) {
-			op = par(c(Gparm,list(cex=.8)))
-			mapdom2(d4,x,x,y,main=main,...)
-		} else {
-			op = par(c(Gparm,list(mfcol=c(2,2),cex=.7)))
-
-			# if nl=2...
-			indl = as.integer(seq(1,nl,length.out=min(4,nl)))
-			if (length(Gindl) == 2) indl = c(1,Gindl,nl)
-			for (il in indl) {
-				tt[2] = sprintf("%s level %d (eta %g)",main[2],il,round(u@eta[il],2))
-				mapdom2(doms[[i]],x,x[,il],y[,il],main=tt,...)
-				mapsegments(domin,lat=mean(domin@ylim),long=mean(domin@xlim),col="darkgrey")
+				# if nl=2...
+				indl = as.integer(seq(1,nl,length.out=min(4,nl)))
+				if (length(Gindl) == 2) indl = c(1,Gindl,nl)
+				for (il in indl) {
+					tt[2] = sprintf("%s lev %d (eta %g)",main[2],il,round(u@eta[il],2))
+					mapdom2(doms[[i]],x,x[,il],y[,il],main=tt,...)
+					mapsegments(domin,lat=mean(domin@ylim),long=mean(domin@xlim),col="darkgrey")
+				}
 			}
-		}
 
-		dev.off()
+			dev.off()
+		}
 
 		ficpng = sprintf("%s/hist%s%s_ff.png",pngd,prefix,dom)
+		if (! file.exists(ficpng) || force) {
+			png(ficpng)
 
-		png(ficpng)
-		tt = "wind speed"
-		if (nl == 1) {
-			op = par(c(Gparh,list(cex=.8)))
-			hist.annot(ffdom,col="whitesmoke",main=tt[1],xlab="wind speed")
-		} else {
-			ff = sqrt(u^2+v^2)
-			ff = setDataPart(u,ff)
-			op = par(c(Gparm,list(mfcol=c(2,2),cex=.7)))
-			plotsectiongeo(ff,doms[[i]],main=tt[1],palette=desc$palette)
+			tt = "wind speed"
+			if (nl == 1) {
+				par(c(Gparh,list(cex=.8)))
+				hist.annot(ffdom,col="whitesmoke",main=tt[1],xlab="wind speed")
+			} else {
+				ff = sqrt(u^2+v^2)
+				ff = setDataPart(u,ff)
+				par(c(Gparm,list(mfcol=c(2,2),cex=.7)))
+				plotsectiongeo(ff,doms[[i]],main=tt[1],palette=desc$palette)
 
-			par(mar=Gparh$mar)
-			hist.annot(ffdom,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-			plotbv(qv[,,i],u@eta,main=tt[1],xlab="",ylab="",ylim=yeta)
-			abline(v=0,col="darkgrey",lty=2)
+				par(mar=Gparh$mar)
+				hist.annot(ffdom,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
+				plotbv(qv[,,i],u@eta,main=tt[1],xlab="",ylab="",ylim=rev(range(u@eta)))
+				abline(v=0,col="darkgrey",lty=2)
+			}
+
+			dev.off()
 		}
-
-		dev.off()
 	}
 
 	qv
-}
-
-mapgpole = function(grid,u,v,prefix)
-{
-	nord = compass(g4)
-	#if (! is.null(frlow$ind)) nord = nord[frlow$ind,]
-	u = ucs(nord,u,v)
-	v = vcs(nord,u,v)
-
-	p = pole(grid)
-	pole = new("Domain",xlim=p[2]+c(-6,6),ylim=p[1]+c(-5,5),proj="stereo")
-	x = zoom(u,pole)
-	y = zoom(v,pole)
-	png(sprintf("%s/%s_ff.png",pngd,prefix))
-	mapdom2(pole,x,x[,1],y[,1],main="u/v wind components")
-	dev.off()
-}
-
-stat2array = function(lstat)
-{
-	# can be list() (ie no dim) because of bin files or missing dates
-	dims = NULL
-
-	for (l in lstat) {
-		dims = dim(l[[1]])
-		if (! is.null(dims)) break
-	}
-
-	stopifnot(! is.null(dims))
-
-	data = array(NA_real_,dim=c(dims,length(lstat[[1]]),length(lstat)))
-
-	for (i in seq(along=lstat)) {
-		for (id in seq(along=lstat[[i]])) {
-			if (is.list(lstat[[i]][[id]])) next
-
-			data[,,,id,i] = simplify2array(lstat[[i]][[id]])
-		}
-	}
-
-	data
-}
-
-rms = function(x,...)
-{
-	sqrt(mean(x^2,...))
-}
-
-rmx = function(x,...)
-{
-	c(rms=rms(x,...),ave=mean(x,...),q90=quantile(abs(x),prob=.9,...))
-}
-
-plotb = function(x,y,lty=1,col="bisque",pch="+",ylim=NULL,...)
-{
-	if (is.null(ylim)) ylim = range(boxplot(y,outline=FALSE,plot=FALSE)$stats)
-	plot(x,apply(y,2,mean),type="l",ylim=ylim,...)
-	w = diff(par("usr")[1:2])/25
-	boxplot(y,col=col,lty=lty,pch=pch,pars=list(boxwex=w),add=TRUE,at=x,xaxt="n",yaxt="n")
-}
-
-plotbv = function(x,y,lty=1,col="bisque",pch="+",xlim=NULL,...)
-{
-	if (is.null(xlim)) xlim = range(boxplot(x,outline=FALSE,plot=FALSE)$stats)
-	plot(apply(x,2,mean),y,type="l",xlim=xlim,...)
-	w = diff(par("usr")[3:4])/30
-	boxplot(x,col=col,lty=lty,pch=pch,pars=list(boxwex=w),horizontal=TRUE,add=TRUE,at=y,
-		xaxt="n",yaxt="n")
-}
-
-matplott = function(x,y,col=1,pch="+",...)
-{
-	matplot(x,y,type="o",lty=1:3,col=col,pch=pch,...)
-	abline(h=0,col="darkgrey")
-	legend("topleft",c("RMS","bias","errx2"),col=col,lty=1:3,pch=pch,bg="transparent")
-}
-
-matplotv = function(x,y,col=1,pch="+",...)
-{
-	matplot(x,y,type="o",lty=1:3,col=col,pch=pch,...)
-	abline(v=0,col="darkgrey")
-	legend("topleft",c("RMS","bias","errx2"),col=col,lty=1:3,pch=pch,bg="transparent")
 }
 
 statarray = function(data,x,y)
@@ -1141,7 +931,7 @@ statarray = function(data,x,y)
 	array(dim=c(dim(data),length(x),length(y)),dimnames=c(dimnames(data),list(x,y)))
 }
 
-addrmxd = function(rmxd,data,nrmxd,id)
+addrmxd = function(rmxd,data,nrmxd,id,parallel=FALSE)
 {
 	if (! is.matrix(rmxd)) rmxd = matrix(rmxd,ncol=4)
 
@@ -1149,94 +939,33 @@ addrmxd = function(rmxd,data,nrmxd,id)
 		rmxd[,1] = data^2
 		rmxd[,2] = data
 		rmxd[,3] = abs(data)
-		rmxd[,4] = 1
+		rmxd[,4] <- 1
+	} else if (parallel) {
+		# dependence on rmxd[,3]: rmxd[,4] must be done before
+		ind = which(abs(data) > rmxd[,3])
+		rmxd[ind,4] = id
+
+		t1 = mcparallel(rmxd[,1]+data^2)
+		t2 = mcparallel(rmxd[,2]+data)
+		t3 = mcparallel(pmax(rmxd[,3],abs(data)))
+
+		lc = mccollect(list(t1,t2,t3))
+		try(parallel:::mckill(list(t1,t2,t3),15),silent=TRUE)
+		for (i in 1:3) rmxd[,i] = lc[[i]]
+		rm(lc)
 	} else {
+		# dependence on rmxd[,3]: rmxd[,4] must be done before
+		ind = which(abs(data) > rmxd[,3])
+		rmxd[ind,4] = id
 		rmxd[,1] = rmxd[,1]+data^2
 		rmxd[,2] = rmxd[,2]+data
-		ind = which(abs(data) > rmxd[,3])
 		rmxd[,3] = pmax(rmxd[,3],abs(data))
-		rmxd[ind,4] = id
 	}
 
 	rmxd
 }
 
-saveZmean = function(filename,framep,paramsp,datesp,htimep,lzmeanp)
-{
-	if (! file.exists(filename)) {
-		frlow = framep
-		params = paramsp
-		dates = datesp
-		htime = htimep
-		lzmeand = lzmeanp
-		save(frlow,params,dates,htime,lzmeand,file=filename)
-		return()
-	}
-
-	noms = load(filename)
-	stopifnot(all(c("frlow","params","dates","htime","lzmeand") %in% noms))
-
-	if (class(frlow$g4) != class(framep$g4)) {
-		cat("--> different classes:",class(frlow$g4),class(framep$g4),"\n")
-		return()
-	} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
-		cat("--> different grid\n")
-		return()
-	} else if (frlow$nlevel != framep$nlevel || ! identical(frlow$ilev,framep$ilev)) {
-		cat("--> different levels, in file:",frlow$nlevel,framep$nlevel,"\n")
-		return()
-	} else if (! identical(dates,datesp)) {
-		cat("--> different dates, in file:",dates,"\n")
-		return()
-	}
-
-	indt = match(htimep,htime)
-
-	if (identical(params,paramsp)) {
-		inew = is.na(indt)
-
-		for (j in seq(along=lzmeand)) {
-			if (! all(inew)) {
-				lzmeand[[j]][,,,na.omit(indt)] = lzmeanp[[j]][,,,which(! inew)]
-			}
-
-			if (any(inew)) {
-				cat("--> add times to file:",htimep[inew],"\n")
-				d = dim(lzmeand[[j]])
-				dn = dimnames(lzmeand[[j]])
-				zmeand = c(lzmeand[[j]],lzmeanp[[j]][,,,which(inew)])
-				d[4] = d[4]+length(which(inew))
-				if (! is.null(dn)) dn[[4]] = c(dn[[4]],dimnames(lzmeanp[[j]])[[4]][inew])
-				lzmeand[[j]] = array(zmeand,dim=d,dimnames=dn)
-			}
-		}
-
-		if (any(inew)) htime = c(htime,htimep[inew])
-	} else {
-		indp = match(paramsp,params)
-		cat("--> different params, in file:",params,"\n")
-		if (! identical(htime,htimep)) {
-			cat("--> different steps, in file:",htime,"-> no saving\n")
-			return()
-		}
-
-		inew = is.na(indp)
-		if (! all(inew)) {
-			cat("--> replace params already in file:",paramsp[! inew],"\n")
-			lzmeand[na.omit(indp)] = lzmeanp[which(! inew)]
-		}
-
-		if (any(inew)) {
-			cat("--> add params to file:",paramsp[inew],"\n")
-			lzmeand = c(lzmeand,lzmeanp[inew])
-			params = c(params,paramsp[inew])
-		}
-	}
-
-	save(frlow,params,dates,htime,lzmeand,file=filename)
-}
-
-saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp)
+saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp,lzmeanp)
 {
 	if (! file.exists(filename)) {
 		frlow = framep
@@ -1245,7 +974,8 @@ saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp)
 		dates = datesp
 		htime = htimep
 		lstatd = lstatdp
-		save(frlow,params,doms,dates,htime,lstatd,file=filename)
+		lzmeand = lzmeanp
+		save(frlow,params,doms,dates,htime,lstatd,lzmeand,file=filename)
 		return()
 	}
 
@@ -1283,6 +1013,7 @@ saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp)
 			if (! all(inew)) {
 				cat("--> replace times already in file:",htimep[! inew],"\n")
 				lstatd[[j]][,,,,na.omit(indt)] = lstatdp[[j]][,,,,which(! inew)]
+				lzmeand[[j]][,,,na.omit(indt)] = lzmeanp[[j]][,,,which(! inew)]
 			}
 
 			if (any(inew)) {
@@ -1293,6 +1024,12 @@ saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp)
 				d[5] = d[5]+length(which(inew))
 				if (! is.null(dn)) dn[[5]] = c(dn[[5]],dimnames(lstatdp[[j]])[[5]][inew])
 				lstatd[[j]] = array(statd,dim=d,dimnames=dn)
+				d = dim(lzmeand[[j]])
+				dn = dimnames(lzmeand[[j]])
+				zmeand = c(lzmeand[[j]],lzmeanp[[j]][,,,which(inew)])
+				d[4] = d[4]+length(which(inew))
+				if (! is.null(dn)) dn[[4]] = c(dn[[4]],dimnames(lzmeanp[[j]])[[4]][inew])
+				lzmeand[[j]] = array(zmeand,dim=d,dimnames=dn)
 			}
 		}
 
@@ -1309,110 +1046,57 @@ saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp)
 		if (! all(inew)) {
 			cat("--> replace params already in file:",paramsp[! inew],"\n")
 			lstatd[na.omit(indp)] = lstatdp[which(! inew)]
+			lzmeand[na.omit(indp)] = lzmeanp[which(! inew)]
 		}
 
 		if (any(inew)) {
 			cat("--> add params to file:",paramsp[inew],"\n")
 			lstatd = c(lstatd,lstatdp[inew])
+			lzmeand = c(lzmeand,lzmeanp[inew])
 			params = c(params,paramsp[inew])
 		}
 	}
 
-	save(frlow,params,doms,dates,htime,lstatd,file=filename)
+	save(frlow,params,doms,dates,htime,lstatd,lzmeand,file=filename)
 }
 
-loadZmean = function(filename,framep,paramsp,datesp,htimep)
+interptest = function(f)
 {
-	noms = load(filename)
-	stopifnot(all(c("frlow","params","dates","htime","lzmeand") %in% noms))
+	f[,] = f@grid@lat
+	glow = degrade(f@grid)
+	fl = interp(f,glow,"linear")
+	fp = interp(f,glow,"ppp")
+	nlat = length(glow@nlong)
 
-	if (class(frlow$g4) != class(framep$g4)) {
-		cat("--> different classes:",class(frlow$g4),class(framep$g4),"\n")
-		return(NULL)
-	} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
-		cat("--> different grid\n")
-		return(NULL)
-	} else if (frlow$nlevel != framep$nlevel || ! identical(frlow$ilev,framep$ilev)) {
-		cat("--> different levels:",frlow$nlevel,framep$nlevel,"\n")
-		return(NULL)
-	}
+	# suppress 1 lat line and 1 point on each remaining lat
+	clats = c(0,cumsum(glow@nlong))
+	glow@nlong = glow@nlong[-nlat]
+	glow@nlong = as.integer(glow@nlong-1)
+	glow@theta = equiLat(nlat-1)
+	ind = lapply(seq(nlat-1),function(ilat) clats[ilat]+seq(glow@nlong[ilat]))
+	ind = unlist(ind)
+	glow@lat = glow@lat[ind]
+	glow@long = glow@long[ind]
 
-	indp = match(paramsp,params)
-	if (any(is.na(indp))) {
-		cat("--> some params missing:",paramsp[is.na(indp)],"\n")
-		return(NULL)
-	}
+	# compare f to fl and fp (plot, hist or anything else)
+	fl = interp(f,glow,"linear")
+	fp = interp(f,glow,"ppp")
 
-	indd = match(datesp,dates)
-	if (any(is.na(indd))) {
-		cat("--> some dates missing:",datesp[is.na(indd)],"\n")
-		return(NULL)
-	}
-
-	indt = match(htimep,htime)
-	if (any(is.na(indt))) {
-		cat("--> some time-steps missing:",htimep[is.na(indt)],"\n")
-		return(NULL)
-	}
-
-	lapply(lzmeand[indp],function(x) x[,,indd,indt,drop=FALSE])
+	return(NULL)
 }
 
-loadStat = function(filename,framep,paramsp,domsp,datesp,htimep)
+interptesto = function(f,grid)
 {
-	noms = load(filename)
-	stopifnot(all(c("frlow","params","dates","htime","lstatd") %in% noms))
-	if (! exists("doms")) {
-		cat("doms absent, use domsp\n")
-		stopifnot(dim(lstatd[[1]])[3] == length(domsp))
-		doms = domsp
-	} else if (is.list(doms)) {
-		doms = names(doms)
-	}
-
-	if (class(frlow$g4) != class(framep$g4)) {
-		cat("--> different classes:",class(frlow$g4),class(framep$g4),"\n")
-		return(NULL)
-	} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
-		cat("--> different grid\n")
-		return(NULL)
-	} else if (frlow$nlevel != framep$nlevel || ! identical(frlow$ilev,framep$ilev)) {
-		cat("--> different levels:",frlow$nlevel,framep$nlevel,"\n")
-		return(NULL)
-	}
-
-	indp = match(paramsp,params)
-	if (any(is.na(indp))) {
-		cat("--> some params missing:",paramsp[is.na(indp)],"\n")
-		return(NULL)
-	}
-
-	indz = match(domsp,doms)
-	if (any(is.na(indz))) {
-		cat("--> some domains missing:",domsp[is.na(indz)],"\n")
-		return(NULL)
-	}
-
-	indd = match(datesp,dates)
-	if (any(is.na(indd))) {
-		cat("--> some dates missing:",datesp[is.na(indd)],"\n")
-		return(NULL)
-	}
-
-	indt = match(htimep,htime)
-	if (any(is.na(indt))) {
-		cat("--> some time-steps missing:",htimep[is.na(indt)],"\n")
-		return(NULL)
-	}
-
-	lapply(lstatd[indp],function(x) x[,,indz,indd,indt,drop=FALSE])
+	fi = interp(f,grid,"linear")
+	gi = fi@grid
+	stopifnot(isTRUE(identical(gi@pole,grid@pole)))
+	stopifnot(isTRUE(identical(gi@nlong,grid@nlong)))
 }
 
 Gparm = list(mar=c(1.8,1.8,2.5,4.8),mgp=c(1.5,.5,0),tcl=-.3)
 Gparh = list(mar=c(1.8,1.8,2.5,1),mgp=c(1.5,.5,0),tcl=-.3)
 Gpart = list(mar=c(2.5,2.5,2.5,1),mgp=c(1.5,.5,0),tcl=-.3,cex=.8)
 Gparmt = list(mar=c(2.5,2.5,2.5,4.8),mgp=c(1.5,.5,0),tcl=-.3)
-Gficbin = tempfile(fileext=".bin")
 
 doms = readDom(sprintf("%s/config/domain.txt",Gdiag))
 if (file.exists("config/domain.txt")) doms = readDom("config/domain.txt",doms)
@@ -1451,16 +1135,21 @@ if (! "params" %in% names(cargs)) {
 } else {
 	params = cargs$params
 }
+cat("--> parameters:",params,"\n")
 
 ind = match(params,descall$faname)
 if (any(is.na(ind))) stop("unknown parameters, see config/params.txt")
 
 desc = descall[ind,]
 npar = dim(desc)[1]
+descb = desc
+descb$palette = "Blue-Red+"
 
 ind2 = match(c("ff","gradsp","gradl"),descall$symbol)
 if (any(is.na(ind2))) stop("unknown parameters 2, see config/params.txt")
 desc2 = descall[ind2,]
+desc2b = desc2
+desc2b$palette = "Blue-Red+"
 
 ilev = 0
 if ("level" %in% names(cargs)) {
@@ -1477,33 +1166,42 @@ Gindl = which(as.integer((10*ilev)%%10) > 0)
 ilev = as.integer(ilev)
 cat("--> level indices/number (0: all levels):",ilev,"\n")
 
-pngd = "."
-if ("png" %in% names(cargs)) pngd = cargs$png
-
 ref = "."
 if ("ref" %in% names(cargs)) ref = cargs$ref
 
 mapstat = TRUE
 if ("mapstat" %in% names(cargs)) mapstat = cargs$mapstat == 1
 
-if ("png" %in% names(cargs) || ! capabilities("X11")) {
-	cat("--> no X11 device, sending plots to PNG files\n")
+prof = FALSE
+if ("prof" %in% names(cargs)) prof = as.logical(cargs$prof)
+
+wide = FALSE
+if ("wide" %in% names(cargs)) wide = as.logical(cargs$wide)
+
+etahigh = 0
+if ("etahigh" %in% names(cargs)) etahigh = as.numeric(cargs$etahigh)
+
+pngd = ""
+if ("png" %in% names(cargs)) pngd = as.character(cargs$png)
+
+if (! is.na(pngd) && nzchar(pngd) || ! capabilities("X11")) {
+	cat("--> sending plots to PNG files\n")
 	if (! file.exists(pngd)) dir.create(pngd,recursive=TRUE)
 } else {
 	png = dev.off = function(...) return(invisible(NULL))
 	if (interactive()) options(device.ask.default=TRUE)
 }
 
+ff = list(vars=c("X","Y"),formula=function(x,y) sqrt(x^2+y^2),symbol="ff")
+gsp = list(vars=c("L","M"),formula=function(x,y) sqrt(x^2+y^2),symbol="gradsp")
+#gl = list(vars="GPL",formula=gradl,symbol="gradl")
+compound = list("wind speed"=ff,"gradient module"=gsp)
+
 if (interactive()) browser()
 
 lstat2 = lstat2d = lerr2 = vector("list",dim(desc2)[1])
 names(lstat2) = names(lstat2d) = desc2$symbol
 lstat = lstatd = lerr = lzmeand = vector("list",npar)
-lstatr = NULL
-if (! is.null(cargs$cmp)) {
-	stopifnot(file.exists(cargs$cmp) && file.info(cargs$cmp)$isdir)
-	lstatr = list()
-}
 
 htime = integer(length(dff$file))
 tstep = rep(NA,length(dff$file))
@@ -1541,12 +1239,13 @@ for (id in seq(along=dates)) {
 			ldata = getVars(con,grid,desc$faname,quiet)
 			close(con)
 			quiet = TRUE
-			stopifnot(exists("frame",mode="list"))
-			stopifnot(is.equal(grid,frame$g4) && length(eta) != frame$nlevel)
+			stopifnot(exists("frame.save",mode="list"))
+			stopifnot(is.equal(grid,frame.save$g4) && isTRUE(all.equal(eta),frame.save$eta))
 			frame$fc = fc
 			frame$eta = eta
 		} else {
 			frame = getFrame(fics[i])
+			ldata = vector("list",length(desc$faname))
 		}
 
 		fc = frame$fc
@@ -1559,7 +1258,20 @@ for (id in seq(along=dates)) {
 		g4 = frame$g4
 		cat("--> grid type:",class(g4),"\n")
 		hh = formatStep(fc@step,"h")
-		s = sprintf("base/step: %s +%s - file: %s - graph: %s",base,hh,fics[i],dff$graph[i])
+		s = sprintf("base/step: %s +%s - file: %s",base,hh,fics[i])
+
+		date = fc@base+fc@step
+		cat("--> validity:",strftime(date,"%Y%m%d %H"),"\n")
+		htime[i] = fc@step
+
+		ficref = sprintf("%s/%s/%s",ref,strftime(date,"%H/%Y%m%d"),dff$ref[i])
+		if (! file.exists(ficref) && fc@step > 0) {
+			cat("--> no ref file",ficref,"- try base time\n")
+			ficref = sprintf("%s/%s/%s",ref,strftime(fc@base,"%H/%Y%m%d"),dff$ref[i])
+		}
+
+		if (file.exists(ficref)) s = sprintf("%s - ref: %s",s,dff$ref[i])
+		s = sprintf("%s - graph: %s",s,dff$graph[i])
 
 		if (is.na(tstep[i])) {
 			cat("-->",s,"\n")
@@ -1572,9 +1284,10 @@ for (id in seq(along=dates)) {
 		}
 
 		gg = dd$graph[id] && dff$graph[i]
-		grmap = NULL
+		prefixp = character()
+		if (gg) prefixp = sprintf("%s+%s",as.character(fc@base,"%Y%m%d%H"),hh)
 
-		if (gg && is(g4,"GaussGrid")) {
+		if (gg && is(g4,"GaussGrid") && ! is.null(cargs$test)) {
 			mapf = dilat(g4)
 			ilateq = equalize(mapf,offset=.5)
 			#if (length(ilateq) < length(g4@nlong)) grmap = degrade(g4,ilateq)
@@ -1596,13 +1309,12 @@ for (id in seq(along=dates)) {
 			if (! g4 == frame.save$g4) cat("--> test for different frame!\n")
 		}
 
+		frlow = frame
+
 		if (length(g4@nlong) > nlatmax) {
 			cat("--> halving initial resolution:",length(g4@nlong),max(g4@nlong),"\n")
-			frlow = frame
 			frlow$g4 = degrade(g4,nlat=2,nlon=2)
 			frlow$npdg = sum(frlow$g4@nlong)
-		} else {
-			frlow = frame
 		}
 
 		stopifnot(all(abs(ilev) <= length(frlow$eta)))
@@ -1623,49 +1335,97 @@ for (id in seq(along=dates)) {
 			frlow$ilev = seq(nlev)
 		}
 
-		etai = frlow$eta[frlow$ilev]
-		yeta = rev(range(frlow$eta))
-
-		date = fc@base+fc@step
-		cat("--> validity:",strftime(date,"%Y%m%d %H"),"\n")
-		htime[i] = fc@step
-
-		ficref = sprintf("%s/%s/%s",ref,strftime(date,"%H/%Y%m%d"),dff$ref[i])
-		if (! file.exists(ficref) && fc@step > 0) {
-			cat("--> no ref file",ficref,"- try base time\n")
-			ficref = sprintf("%s/%s/%s",ref,strftime(fc@base,"%H/%Y%m%d"),dff$ref[i])
-		}
-
 		if (! file.exists(ficref)) {
 			cat("--> no ref file",ficref,"\n")
+			framo = NULL
 		} else {
 			cat("Ref file:",ficref,"\n")
 			framo = getFrame(ficref)
-		}
 
-		datax = datay = dataz = datal = datam = datagpl = NULL
-		dataox = dataoy = dataoz = NULL
-
-		for (j in seq(npar)) {
-			if (desc$ltype[j] == "-") {
-				patt = desc$faname[j]
-			} else if (length(frlow$ilev) > 1) {
-				# selection requires same nlevel (interpolation impossible)
-				if (frlow$nlevel == frame$nlevel && length(frlow$ilev) < frlow$nlevel) {
-					patt = paste(sprintf("%03d",frlow$ilev),collapse="|")
-					patt = sprintf("%s(%s)%s",desc$ltype[j],patt,desc$faname[j])
-				} else {
-					patt = sprintf("%s\\d+%s",desc$ltype[j],desc$faname[j])
-				}
-			} else if (desc$ltype[j] == "S") {
-				patt = sprintf("S%03d%s",frlow$ilev,desc$faname[j])
+			# selection requires same nlevel (interpolation impossible)
+			if (isTRUE(all.equal(framo$eta,frlow$eta))) {
+				framo$ilev = frlow$ilev
 			} else {
-				cat("--> level type not 'S' for reading specified level\n")
-				next
+				ind = findInterval(frlow$eta[frlow$ilev],framo$eta)
+				stopifnot(all(0 < ind & ind <= framo$nlevel))
+				# for linear interpolation, each level and the following one
+				# for quad interpolation, each level and a few surrounding ones
+				ind = unique(sort(c(ind-1,ind,ind+1,ind+2)))
+				framo$ilev = ind[0 < ind & ind <= framo$nlevel]
 			}
 
+			fco = framo$fc
+			dato = fco@base+fco@step
+			if (dato != date) {
+				cat("--> ref file has different time:",strftime(dato,"%H/%Y%m%d"),"\n")
+				framo = NULL
+			}
+
+			prefixo = sprintf("ref%s",prefixp)
+			prefixd = character()
+			if (! mapstat) prefixd = sprintf("diff%s",prefixp)
+		}
+
+		lc = list()
+		selev = length(frlow$ilev) < length(frlow$eta)
+		for (j in seq(npar)) {
+			if (isbin[i] || regexpr("^\\.",desc$faname[j]) > 0) next
+
+			patt = FApattern(desc$ltype[j],desc$faname[j],frlow$ilev,selev)
+			if (is.null(patt)) next
+
 			ss = desc$symbol[j]
-			nom = desc$longname[j]
+
+			cat(". get fields matching pattern",patt,"\n")
+			stopifnot(is.null(ldata[[j]]))
+			n = length(lc)+1
+			lc[[n]] = mcparallel(getField(fics[i],patt,ss,frame,frlow))
+			if (n == 4 || j == npar) {
+				ld = mccollect(lc)
+				try(parallel:::mckill(lc,15),silent=TRUE)
+				for (k in 1:n) {
+					if (is.null(ld[[k]])) stop("--> field not found in FA/GRIB file\n")
+					ldata[[j-n+k]] = ld[[k]]
+				}
+
+				rm(lc,ld)
+				lc = list()
+			}
+		}
+
+		if (! is.null(framo)) {
+			ldatao = lc = list()
+			selev = length(framo$ilev) < length(framo$eta)
+			for (j in seq(npar)) {
+				if (isbin[i] || regexpr("^\\.",desc$faname[j]) > 0) next
+
+				ss = desc$symbol[j]
+				patto = FApattern(desc$ltype[j],desc$faname[j],framo$ilev,selev)
+				#if (patto != patt) cat("--> new pattern for ref:",patto,"\n")
+
+				cat(". get ref fields matching pattern",patt,"\n")
+				if (length(ldatao) >= j) stopifnot(is.null(ldatao[[j]]))
+				n = length(lc)+1
+				lc[[n]] = mcparallel(getField(ficref,patto,ss,framo,frlow,cache.alt=TRUE,
+					mc.cores=8))
+				if (n == 4 || j == npar) {
+					ld = mccollect(lc)
+					try(parallel:::mckill(lc,15),silent=TRUE)
+					for (k in 1:n) {
+						if (is.null(ld[[k]])) stop("--> field not found in FA/GRIB file\n")
+						ldatao[[j-n+k]] = ld[[k]]
+					}
+
+					rm(lc,ld)
+					lc = list()
+				}
+			}
+		}
+
+		lsave = lsaveo = list()
+
+		for (j in seq(npar)) {
+			ss = desc$symbol[j]
 
 			if (isbin[i] && regexpr("^\\.",desc$faname[j]) > 0) {
 				cat(". get field as diag",desc$faname[j],"\n")
@@ -1676,12 +1436,8 @@ for (id in seq(along=dates)) {
 
 				f = setDiagData(frame$g4,frlow$eta,frlow$ilev,ldata[[j]])
 			} else if (! isbin[i] && regexpr("^\\.",desc$faname[j]) < 0) {
-				cat(". get fields matching pattern",patt,"\n")
-				f = getField(fics[i],patt,ss,frame,frlow)
-				if (is.null(f)) {
-					cat("--> field not found in FA/GRIB file\n")
-					next
-				}
+				cat(". get field",desc$faname[j],"\n")
+				f = ldata[[j]]
 			} else {
 				cat("--> no field",desc$faname[j],"in",fics[i],"(OK)\n")
 				next
@@ -1689,30 +1445,8 @@ for (id in seq(along=dates)) {
 
 			if (! is.null(cargs$test)) {
 				browser()
-				ft = f
-				#ft[,] = c(-1:1,0,-1)
-				ft[,] = ft@grid@lat
-				glow = degrade(frlow$g4)
-				fl = interp(ft,glow,"linear")
-				fp = interp(ft,glow,"ppp")
-				nlat = length(glow@nlong)
-				# suppress 1 lat line and 1 point on each remaining lat
-				clats = c(0,cumsum(glow@nlong))
-				glow@nlong = glow@nlong[-nlat]
-				glow@nlong = as.integer(glow@nlong-1)
-				glow@theta = 90-180*(seq(nlat-1)-.5)/(nlat-1)
-				ind = lapply(seq(nlat-1),function(ilat) clats[ilat]+seq(glow@nlong[ilat]))
-				ind = unlist(ind)
-				glow@lat = glow@lat[ind]
-				glow@long = glow@long[ind]
-				fl = interp(ft,glow,"linear")
-				fp = interp(ft,glow,"ppp")
-				if (exists("framo")) {
-					fi = interp(ft,framo$g4,"linear")
-					gi = fi@grid
-					stopifnot(isTRUE(identical(gi@pole,framo$g4@pole)))
-					stopifnot(isTRUE(identical(gi@nlong,framo$g4@nlong)))
-				}
+				interptest(f)
+				if (! is.null(framo)) interptesto(f,framo$g4)
 			}
 
 			nl = length(f@eta)
@@ -1723,42 +1457,36 @@ for (id in seq(along=dates)) {
 			}
 
 			cat("Primary checks\n")
-			stopifnot(f@grid == frlow$g4)
-			if (length(f@eta) > 1) stopifnot(all(f@eta == frlow$eta[frlow$ilev]))
-			stopifnot(all(apply(f,2,function(x) all(! is.infinite(x)) && any(! is.na(x)))))
+			if (i == 1) {
+				stopifnot(f@grid == frlow$g4)
+				if (length(f@eta) > 1) stopifnot(all(f@eta == frlow$eta[frlow$ilev]))
+				dataok = sapply(seq(along=f@eta),
+					function(i) all(! is.infinite(f[,i])) && any(! is.na(f[,i])))
+				stopifnot(all(dataok))
+			}
 
-			#if (! all(apply(f,2,function(x) length(unique(na.omit(x))) > 1))) {
-			if (length(unique(na.omit(as.vector(f)))) == 1) {
-				cat("--> constant value of ",na.omit(as.vector(f))[1],"\n")
+			fnx = range(f,na.rm=TRUE)
+			if (diff(fnx) == 0) {
+				cat("--> constant value of ",fnx[1],"\n")
 				next
 			}
 
 			cat("Compute stats and graphics for domains\n")
-			prefix = character()
-			if (gg) prefix = sprintf("%s+%s",as.character(fc@base,"%Y%m%d%H"),hh)
 			tt = desc$longname[j]
 			tt[2] = sprintf("on %s +%s",base,hh)
-			qv = mapexi(f,grmap,desc[j,],doms,prefix,main=tt)
+			qv = mapexi(f,desc[j,],doms,prefix=prefixp,main=tt,mnx=mapstat,mc.cores=4)
 			if (is.null(lstat[[j]])) lstat[[j]] = statarray(qv,dates,dff$file)
 			stopifnot(all(dim(qv) == dim(lstat[[j]])[1:3]))
 			lstat[[j]][,,,id,i] = qv
 
-			if (desc$save[j] == "X") {
-				datax = f
-			} else if (desc$save[j] == "Y") {
-				datay = f
-			} else if (desc$save[j] == "Z") {
-				dataz = f
-			} else if (desc$save[j] == "L") {
-				datal = f
-			} else if (desc$save[j] == "M") {
-				datam = f
-			} else if (desc$save[j] == "GPL" && is(g4,"GaussGrid")) {
-				datagpl = gradl(f,f@grid,mc.cores=8)
+			if (nzchar(desc$save[j])) {
+				n = length(lsave)
+				lsave[[n+1]] = f
+				names(lsave)[n+1] = desc$save[j]
 			}
 
-			if (! file.exists(ficref)) {
-				rm(f,qv)
+			if (length(ldatao) < j || is.null(ldatao[[j]])) {
+				rm(qv)
 				gc()
 				next
 			}
@@ -1768,62 +1496,52 @@ for (id in seq(along=dates)) {
 				if (! isbin[i]) next
 				if (is.null(ldata[[j]])) next
 
-				fo = setDiagData(framo$g4,frlow$eta,frlow$ilev,ldata[[j]])
+				fo = setDiagData(framo$g4,frlow$eta,frlow$ilev,ldatao[[j]])
 			} else {
 				if (isbin[i]) next
 
-				if (desc$ltype[j] != "-") {
-					# selection requires same nlevel (interpolation impossible)
-					if (framo$nlevel == frlow$nlevel) {
-						framo$ilev = frlow$ilev
-					} else {
-						ind = findInterval(frlow$eta[frlow$ilev],framo$eta)
-						stopifnot(all(0 < ind & ind < framo$nlevel))
-						# for linear interpolation, each level and the following one...
-						framo$ilev = unique(sort(c(ind,ind+1)))
-					}
-
-					if (length(framo$ilev) < framo$nlevel) {
-						patt = paste(sprintf("%03d",framo$ilev),collapse="|")
-						patt = sprintf("%s(%s)%s",desc$ltype[j],patt,desc$faname[j])
-					} else {
-						patt = sprintf("%s\\d+%s",desc$ltype[j],desc$faname[j])
-					}
-
-					cat("--> new pattern for ref:",patt,"\n")
-				}
-
-				fo = getField(ficref,patt,ss,framo,frlow,cache.alt=TRUE)
+				fo = ldatao[[j]]
 			}
 
 			if (desc$conv[j] != "") {
-				cat("Convert data with:",desc$fconv[j],"\n")
+				cat("Convert data by:",desc$conv[j],"\n")
 				fo[] = fconv(fo)
 			}
 
 			cat("Primary checks\n")
-			stopifnot(fo@grid == frlow$g4)
-			if (length(fo@eta) > 1) stopifnot(all(fo@eta == frlow$eta[frlow$ilev]))
-			stopifnot(all(apply(fo,2,function(x) all(! is.infinite(x)) && any(! is.na(x)))))
-
-			if (desc$save[j] == "X") {
-				dataox = fo
-			} else if (desc$save[j] == "Y") {
-				dataoy = fo
-			} else if (desc$save[j] == "Z") {
-				dataoz = fo
+			if (i == 1) {
+				stopifnot(fo@grid == frlow$g4)
+				if (length(fo@eta) > 1) stopifnot(all(fo@eta == frlow$eta[frlow$ilev]))
+				dataok = sapply(seq(along=fo@eta),
+					function(i) all(! is.infinite(fo[,i])) && any(! is.na(fo[,i])))
+				stopifnot(all(dataok))
+				stopifnot(all(is.na(f) == is.na(fo)))
 			}
 
-			stopifnot(all(is.na(f) == is.na(fo)))
+			if (nzchar(desc$save[j])) {
+				n = length(lsaveo)
+				lsaveo[[n+1]] = f
+				names(lsaveo)[n+1] = desc$save[j]
+			}
+
 			fd = setDataPart(f,f-fo)
 
 			cat("Compute stats and graphics for domains\n")
-			tto = c(desc$longname[j],strftime(date,"valid: %Y%m%d %Hh"))
-			mapexi(fo,grmap,desc[j,],doms,sprintf("diff%s",prefix),main=tto,prob=0:1)
-			qv = mapexi(fd,grmap,desc[j,],doms)
+			tto = c(tt[1],strftime(date,"valid: %Y%m%d %Hh"))
+			tt[1] = sprintf("Diff of %s",tt[1])
+			mapexi(fo,desc[j,],doms,0:1,prefix=prefixo,main=tto,mnx=mapstat,mc.cores=4)
+			qv = mapexi(fd,descb[j,],doms,prefix=prefixd,main=tt,mnx=FALSE,mc.cores=4)
 
-			cat("Compute errors and zonal mean\n")
-			zm = zonalmean(f)-zonalmean(fo)
+			cat("Compute zonal mean\n")
+			t1 = mcparallel(zonalmean(f))
+			t2 = mcparallel(zonalmean(fo))
+
+			lc = mccollect(list(t1,t2))
+			try(parallel:::mckill(list(t1,t2),15),silent=TRUE)
+			zm = lc[[1]]
+			zo = lc[[2]]
+			rm(lc)
+
 			if (is.null(lstatd[[j]])) {
 				lstatd[[j]] = statarray(qv,dates,dff$file)
 				lzmeand[[j]] = statarray(zm,dates,dff$file)
@@ -1831,104 +1549,75 @@ for (id in seq(along=dates)) {
 			}
 
 			stopifnot(all(dim(qv) == dim(lstatd[[j]])[1:3]))
+			stopifnot(all(dim(zm) == dim(lzmeand[[j]])[1:2]))
+			stopifnot(all(dim(zo) == dim(lzmeand[[j]])[1:2]))
 			lstatd[[j]][,,,id,i] = qv
-			lzmeand[[j]][,,id,i] = zm
-			stopifnot(all(dim(fd) == dim(lerr[[j]])[1:2]))
-			lerr[[j]][,,,i] = addrmxd(lerr[[j]][,,,i],fd,nerr[j,i],id)
+			lzmeand[[j]][,,id,i] = zm-zo
 			stopifnot(! is.null(dimnames(lstatd[[j]])))
-			stopifnot(! is.null(dimnames(lerr[[j]])))
+			rm(fo,qv,zm,zo)
 
-			nerr[j,i] = nerr[j,i]+1
+			if (mapstat) {
+				cat("Compute errors\n")
+				stopifnot(all(dim(fd) == dim(lerr[[j]])[1:2]))
+				lerr[[j]][,,,i] = addrmxd(lerr[[j]][,,,i],fd,nerr[j,i],id,parallel=id>1)
+				stopifnot(! is.null(dimnames(lerr[[j]])))
+				nerr[j,i] = nerr[j,i]+1
+			}
 
-			rm(fo,fd,qv,zm)
+			rm(fd)
 			gc()
+			first = id == 1 && i == 1 && j == 1
+			write.table(gc(),"gc.txt",append=!first,quote=FALSE,col.names=first)
 		}
 
-		if (! is.null(datax) && ! is.null(datay)) {
-			cat(". compound field wind speed\n")
-			ff = setDataPart(datax,sqrt(datax^2+datay^2))
-			print(summary(as.vector(ff)))
+		for (k in seq(along=compound)) {
+			cp = compound[[k]]
+			if (! all(cp$vars %in% names(lsave))) next
 
-			if (gg && is(g4,"GaussGrid") && pole(g4)[1] < 90) {
-				cat("rotating wind to geo North\n")
-				mapgpole(g4,datax,datay,sprintf("map%dpole",i))
-			} else {
-				u = datax
-				v = datay
+			cat(". compound field:",names(compound)[k],"\n")
+			fcomp = setDataPart(f,cp$formula(lsave[cp$vars]))
+
+			j2 = match(cp$symbol,desc2$symbol)
+			tt = desc2$longname[j2]
+			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
+			qv = mapexi(fcomp,desc2[j2,],doms,prefix=prefixp,main=tt)
+			if (length(lstat2) < j2 || is.null(lstat2[[j2]])) {
+				lstat2[[j2]] = statarray(qv,dates,dff$file)
+				lerr[[j]] = statarray(fd,c("rmse","bias","errx","dayx"),dff$file)
 			}
 
-			j2 = match("ff",desc2$symbol)
-			tt = desc2$longname[j2]
-			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
-			qv = mapex2(datax,datay,doms,prefix,main=tt,palette="PuRd")
-			if (is.null(lstat2[[j2]])) lstat2[[j2]] = statarray(qv,dates,dff$file)
 			lstat2[[j2]][,,,id,i] = qv
-			rm(datax,datay)
-		}
 
-		if (! is.null(datal) && ! is.null(datam)) {
-			cat(". compound field modulus\n")
-			gsp = setDataPart(datal,sqrt(datal^2+datam^2))
+			if (! all(cp$vars %in% names(lsaveo))) next
 
-			j2 = match("gradsp",desc2$symbol)
-			tt = desc2$longname[j2]
-			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
-			qv = mapexi(gsp,grmap,desc2[j2,],doms,prefix,main=tt)
-			if (is.null(lstat2[[j2]])) lstat2[[j2]] = statarray(qv,dates,dff$file)
-			lstat2[[j2]][,,,id,i] = qv
-			rm(datal,datam)
-		}
+			fcompo = setDataPart(f,cp$formula(lsaveo[cp$vars]))
 
-		if (! is.null(datagpl)) {
-			cat(". computed field gradl\n")
-			print(summary(as.vector(datagpl)))
+			fd = setDataPart(fcomp,fcomp-fcompo)
 
-			j2 = match("gradl",desc2$symbol)
-			tt = desc2$longname[j2]
-			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
-			qv = mapexi(datagpl,grmap,desc2[j2,],doms,prefix,main=tt)
-			if (is.null(lstat2[[j2]])) lstat2[[j2]] = statarray(qv,dates,dff$file)
-			lstat2[[j2]][,,,id,i] = qv
-			rm(datagpl)
-		}
-
-		if (! is.null(dataox) && ! is.null(dataoy)) {
-			cat(". compound field wind speed\n")
-			ffo = setDataPart(dataox,sqrt(dataox^2+dataoy^2))
-			print(summary(as.vector(ffo)))
-
-			if (is(g4,"GaussGrid") && pole(g4)[1] < 90) {
-				cat("rotating wind to geo North\n")
-				mapgpole(g4,dataox,dataoy,sprintf("mapdiff%dpole",i))
-			}
-
-			ffd = setDataPart(ff,ff-ffo)
-
-			j2 = match("ff",desc2$symbol)
-			tt = desc2$longname[j2]
-			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
-			qv = mapexi(ffd,grmap,desc2[j2,],doms,sprintf("diff%s",prefix),main=tt)
-			if (is.null(lstat2d[[j2]])) {
+			tto[1] = tt[1]
+			tt[1] = sprintf("Diff of %s",tt[1])
+			mapexi(fcompo,desc2[j2,],doms,0:1,prefix=prefixo,main=tto,mnx=mapstat,mc.cores=4)
+			qv = mapexi(fd,desc2b[j2,],doms,prefix=prefixd,main=tt,mnx=FALSE,mc.cores=4)
+			if (length(lstat2d) < j2 || is.null(lstat2d[[j2]])) {
 				lstat2d[[j2]] = statarray(qv,dates,dff$file)
-				lerr2[[j2]] = statarray(ffd,c("rmse","bias","errx","dayx"),dff$file)
 			}
 
 			lstat2d[[j2]][,,,id,i] = qv
-			lerr2[[j2]][,,,i] = addrmxd(lerr2[[j2]][,,,i],ffd,nerr2[j2,i],id)
-			nerr2[j2,i] = nerr2[j2,i]+1
-			rm(dataox,dataoy)
+
+			if (mapstat) {
+				lerr2[[j2]][,,,i] = addrmxd(lerr2[[j2]][,,,i],fd,nerr2[j2,i],id,parallel=id>1)
+				nerr2[j2,i] = nerr2[j2,i]+1
+			}
+
+			rm(qv)
+			gc()
 		}
 
 		gc()
 	}
 }
 
-for (j in seq(along=lstat)) {
-	stopifnot(! is.null(dimnames(lstat[[j]])))
-	stopifnot(! is.null(dimnames(lstatd[[j]])))
-	stopifnot(! is.null(dimnames(lerr[[j]])))
-	stopifnot(! is.null(dimnames(lzmeand[[j]])))
-}
+for (j in seq(along=lstat)) stopifnot(! is.null(dimnames(lstat[[j]])))
 
 if (! is.null(cargs$png)) {
 	tstepgg = grep(" TRUE",tstep,value=TRUE)
@@ -1943,80 +1632,6 @@ if (any(i2)) {
 	cat("Add lstat2 to the statistics of forecasts\n")
 	lstat = c(lstat,lstat2[i2])
 	desc = rbind(desc,desc2[i2,])
-}
-
-i2 = sapply(lstat2d,is.array)
-if (any(i2)) {
-	cat("Add lstatd2 to the statistics of errors\n")
-	lstatd = c(lstatd,lstat2d[i2])
-	lerr = c(lerr,lerr2[i2])
-	nerr = rbind(nerr,nerr2[i2,])
-}
-
-if (mapstat && any(sapply(lerr,is.array))) {
-	cat("Maps and statistics of error (mean bias, RMSE, max and dayx error)\n")
-	descb = desc
-	descb$palette = "Blue-Red+"
-	tt = desc$longname
-
-	for (j in seq(along=lerr)) {
-		cat(". param",desc$symbol[j],"\n")
-		if (dim(lerr[[j]])[2] == 1) {
-			fe = new("Field",grid=frlow$g4,eta=1)
-		} else {
-			fe = new("Field",grid=frlow$g4,eta=frlow$eta[frlow$ilev])
-		}
-
-		for (i in seq(along=dff$file)) {
-			if (! dff$graph[i]) next
-
-			frlow$fc = frame.save$fc
-			frlow$fc@step = htime[i]
-			fc = frlow$fc
-			tt = descb$longname[j]
-			tt[2] = sprintf("step +%s",formatStep(fc@step))
-
-			prefix = character()
-			if (dff$graph[i]) prefix = formatStep(fc@step,"h")
-
-			cat(". bias, RMSE and errmax for",dff$file[i],"\n")
-			bias = array(lerr[[j]][,,2,i]/nerr[j,i],dim(lerr[[j]])[1:2])
-			fe = setDataPart(fe,bias)
-			invisible(mapexi(fe,grmap,descb[j,],doms,sprintf("bias%s",prefix),main=tt,mnx=FALSE))
-
-			rmse = array(sqrt(lerr[[j]][,,1,i]/nerr[j,i]),dim(lerr[[j]])[1:2])
-			fe = setDataPart(fe,rmse)
-			invisible(mapexi(fe,grmap,desc[j,],doms,sprintf("rmse%s",prefix),main=tt,mnx=FALSE))
-
-			errx = array(lerr[[j]][,,3,i],dim(lerr[[j]])[1:2])
-			fe = setDataPart(fe,errx)
-			invisible(mapexi(fe,grmap,desc[j,],doms,sprintf("errx%s",prefix),main=tt,mnx=FALSE))
-
-			cat(". index of maximum error\n")
-			dayx = array(lerr[[j]][,,4,i],dim(lerr[[j]])[1:2])
-			fe = setDataPart(fe,dayx)
-			invisible(mapexi(fe,grmap,desc[j,],doms,sprintf("dayx%s",prefix),main=tt,mnx=FALSE))
-		}
-	}
-}
-
-cat("Save statistics\n")
-saveStat("diag.RData",frlow,params,names(doms),dates,htime,lstatd)
-saveZmean("diagz.RData",frlow,params,dates,htime,lzmeand)
-for (j in seq(along=lstatd)) {
-	ss = desc$symbol[j]
-	fsave = sprintf("diag_%s.RData",ss)
-	saveStat(fsave,frlow,params[j],names(doms),dates,htime,lstatd[j])
-}
-
-lzmeanr = NULL
-if (! is.null(lstatr)) {
-	ficsave = sprintf("%s/diag.RData",cargs$cmp)
-	cat("Load cmp file",ficsave,"\n")
-	lstatr = loadStat(ficsave,frlow,params,names(doms),dates,htime)
-	if (is.null(lstatr)) cat("--> no stat in common from cmp\n")
-	ficsave = sprintf("%s/diagz.RData",cargs$cmp)
-	lzmeanr = loadZmean(ficsave,frlow,params,dates,htime)
 }
 
 if (length(htime) > 2 && diff(htime)[1] == 0) {
@@ -2074,7 +1689,7 @@ for (j in seq(along=lstat)) {
 
 	for (i in seq((ndom-1)%/%nc+1)-1) {
 		png(sprintf("%s/stat%d_%s.png",pngd,i,ss))
-		op = par(c(Gpart,list(mfcol=c(nr,nc))))
+		par(c(Gpart,list(mfcol=c(nr,nc))))
 
 		for (id in 1:min(ndom-nc*i,nc)+nc*i) {
 			tt[2] = sprintf("domain %s",names(doms)[id])
@@ -2082,13 +1697,13 @@ for (j in seq(along=lstat)) {
 
 			for (il in indl) {
 				if (nl > 1) {
-					tt[2] = sprintf("domain %s, level %d",names(doms)[id],frlow$ilev[il0],
+					tt[2] = sprintf("domain %s, lev. [%d,%d]",names(doms)[id],frlow$ilev[il0],
 						frlow$ilev[il])
 				}
 				qfct = matrix(qfc[,il0:il,id,],ncol=length(ht))
 				plotb(ht,qfct,main=tt,xlab=tlab,ylab=ss,xaxt="n")
 				axis(1,ht6)
-				il0 = il
+				il0 = min(il+1,max(indl))
 			}
 		}
 
@@ -2099,18 +1714,42 @@ for (j in seq(along=lstat)) {
 
 	indt = which(apply(qfc,4,function(x) any(! is.na(x))))
 	if (length(indt) > 3) indt = indt[c(1,length(indt)%/%2,length(indt))]
-	nr = min(2,ndom)
+	if (etahigh > 0) {
+		indl = which(etai < etahigh)
+		if (length(indl) < 3) indl = which(etai < .5)
+		if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
+	}
+
 	nc = length(indt)
+	if (etahigh > 0) {
+		nr = 2
+		nj = 1
+		tth = tt
+		tth[1] = sprintf("..., highest levels",nom)
+	} else if (wide) {
+		nr = nj = 1
+	} else {
+		nr = nj = min(2,ndom)
+	}
 
-	for (i in seq((ndom-1)%/%nr+1)-1) {
+	for (i in seq((ndom-1)%/%nj+1)-1) {
 		png(sprintf("%s/statv%d_%s.png",pngd,i,ss))
-		op = par(c(Gpart,list(mfrow=c(nr,nc))))
+		par(c(Gpart,list(mfrow=c(nr,nc))))
 
-		for (id in 1:min(ndom-nr*i,nr)+nr*i) {
+		for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+			if (etahigh > 0) {
+				for (it in indt) {
+					tth[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],tunit)
+					plotbv(qfc[,indl,id,it],etai[indl],main=tth,xlab=ss,ylab="eta",
+						ylim=c(etahigh,yeta[2]))
+				}
+			}
+
 			for (it in indt) {
 				tt[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],tunit)
 				plotbv(qfc[,,id,it],etai,main=tt,xlab=ss,ylab="eta",ylim=yeta)
 			}
+
 		}
 
 		dev.off()
@@ -2118,261 +1757,65 @@ for (j in seq(along=lstat)) {
 }
 
 if (any(sapply(lstatd,is.array))) {
-	cat("Scores of forecasts over",ndom,"domains\n")
 	for (j in seq(along=lstatd)) {
-		ss = desc$symbol[j]
-		nom = desc$longname[j]
-		cat(". param",ss,"\n")
+		stopifnot(! is.null(dimnames(lstatd[[j]])))
+		stopifnot(! is.null(dimnames(lzmeand[[j]])))
+	}
 
-		if (is.null(lstatd[[j]])) {
-			cat("--> no statistics of errors to plot\n")
-			next
-		}
+	i2 = sapply(lstat2d,is.array)
+	if (any(i2)) {
+		cat("Add lstatd2 to the statistics of errors\n")
+		lstatd = c(lstatd,lstat2d[i2])
+		lerr = c(lerr,lerr2[i2])
+		nerr = rbind(nerr,nerr2[i2,])
+	}
 
-		nl = dim(lstatd[[j]])[2]
-		stopifnot(all(dim(lstatd[[j]]) == c(101,nl,ndom,length(dates),nt)))
+	cat("Save statistics\n")
+	saveStat("diag.RData",frlow,params,names(doms),dates,htime,lstatd,lzmeand)
 
-		# dims are [qvalues,lev,dom,time]
-		qe = apply(lstatd[[j]],c(2,3,5),quantile,prob=seq(0,50)/50,na.rm=TRUE)
+	if (mapstat) {
+		cat("Maps and statistics of error (mean bias, RMSE, max and dayx error)\n")
+		for (j in seq(along=lstatd)) stopifnot(! is.null(dimnames(lerr[[j]])))
+		descb = desc
+		descb$palette = "Blue-Red+"
+		tt = desc$longname
 
-		tt = sprintf("Error of %s",nom)
-		nr = min(3,nl)
-		nc = min(2,ndom)
-		indl = round(seq(0,nl,length.out=nr+1)[-1])
-
-		# qe err: ll box 3lx2
-		for (i in seq((ndom-1)%/%nc+1)-1) {
-			png(sprintf("%s/err%d_%s.png",pngd,i,ss))
-			op = par(c(Gpart,list(mfcol=c(nr,nc))))
-
-			for (id in 1:min(ndom-nc*i,nc)+nc*i) {
-				il0 = 1
-				tt[2] = sprintf("domain %s",names(doms)[id])
-				for (il in indl) {
-					if (nl > 1) {
-						tt[2] = sprintf("domain %s, levels [%d,%d]",names(doms)[id],
-							frlow$ilev[il0],frlow$ilev[il])
-					}
-					qet = matrix(qe[,il0:il,id,],ncol=length(ht))
-					plotb(ht,qet,main=tt,xlab=tlab,ylab=ss,xaxt="n")
-					axis(1,ht6)
-					il0 = il
-				}
+		for (j in seq(along=lerr)) {
+			cat(". param",desc$symbol[j],"\n")
+			if (dim(lerr[[j]])[2] == 1) {
+				fe = new("Field",grid=frlow$g4,eta=1)
+			} else {
+				fe = new("Field",grid=frlow$g4,eta=frlow$eta[frlow$ilev])
 			}
 
-			dev.off()
-		}
+			for (i in seq(along=dff$file)) {
+				if (! dff$graph[i]) next
 
-		if (nl > 1) {
-			# qe errv: box v 2x3t back to err, after scores
-			tt = sprintf("Error of %s",nom)
-			indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
-			if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
-			nr = min(2,ndom)
-			nc = length(indt)
+				frlow$fc = frame.save$fc
+				frlow$fc@step = htime[i]
+				fc = frlow$fc
+				tt = descb$longname[j]
+				tt[2] = sprintf("step +%s",formatStep(fc@step,"h"))
 
-			for (i in seq((ndom-1)%/%nr+1)-1) {
-				png(sprintf("%s/errv%d_%s.png",pngd,i,ss))
-				op = par(c(Gpart,list(mfrow=c(nr,nc))))
+				prefix = character()
+				if (dff$graph[i]) prefix = formatStep(fc@step)
 
-				for (id in 1:min(ndom-nr*i,nr)+nr*i) {
-					it0 = 1
-					for (it in indt) {
-						tt[2] = sprintf("domain %s, lead-time [%g,%g]%s",names(doms)[id],
-							ht[it0],ht[it],tunit)
-						qet = qe[,,id,it0:it]
-						if (length(dim(qet)) == 3) qet = matrix(aperm(qet,c(3,1:2)),ncol=nl)
-						plotbv(qet,etai,main=tt,xlab=ss,ylab="eta",ylim=yeta)
-						it0 = it
-					}
-				}
+				cat(". bias, RMSE, errmax and index of errmax for",dff$file[i],"\n")
+				bias = array(lerr[[j]][,,2,i]/nerr[j,i],dim(lerr[[j]])[1:2])
+				fe = setDataPart(fe,bias)
+				mapexi(fe,descb[j,],doms,0:1,prefix=sprintf("bias%s",prefix),main=tt,mnx=FALSE)
 
-				dev.off()
-			}
-		}
+				rmse = array(sqrt(lerr[[j]][,,1,i]/nerr[j,i]),dim(lerr[[j]])[1:2])
+				fe = setDataPart(fe,rmse)
+				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("rmse%s",prefix),main=tt,mnx=FALSE)
 
-		rmxv = apply(lstatd[[j]],c(2,3,5),rmx,na.rm=TRUE)
-		rmxv = aperm(rmxv,c(2:4,1))
-		if (! is.null(lstatr)) {
-			rmxvr = apply(lstatr[[j]],c(2,3,5),rmx,na.rm=TRUE)
-			rmxvr = aperm(rmxvr,c(2:4,1))
-			rmxv = array(c(rmxv,rmxvr),c(dim(rmxv)[1:3],2*dim(rmxv)[4]))
-		}
+				errx = array(lerr[[j]][,,3,i],dim(lerr[[j]])[1:2])
+				fe = setDataPart(fe,errx)
+				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("errx%s",prefix),main=tt,mnx=FALSE)
 
-		tt = sprintf("Score of %s",nom)
-		cols = rep(c("black","royalblue1"),each=3)
-		nr = min(3,nl)
-		nc = min(2,ndom)
-		indl = as.integer(seq(1,nl,length.out=nr))
-
-		# rmxv score: ll plot 3lx2
-		for (i in seq((ndom-1)%/%nc+1)-1) {
-			png(sprintf("%s/score%d_%s.png",pngd,i,ss))
-			op = par(c(Gpart,list(mfcol=c(nr,nc))))
-
-			for (id in 1:min(ndom-nc*i,nc)+nc*i) {
-				tt[2] = sprintf("domain %s",names(doms)[id])
-				for (il in indl) {
-					if (nl > 1) {
-						tt[2] = sprintf("domain %s, level %d",names(doms)[id],frlow$ilev[il])
-					}
-					rmxt = matrix(rmxv[il,id,,],ncol=dim(rmxv)[4])
-					matplott(ht,rmxt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
-					axis(1,ht6)
-				}
-			}
-
-			dev.off()
-		}
-
-		if (nl > 1) {
-			nr = min(2,ndom)
-			nc = length(indt)
-
-			# rmxv scorev: v plot 2x3t
-			for (i in seq((ndom-1)%/%nr+1)-1) {
-				png(sprintf("%s/scorev%d_%s.png",pngd,i,ss))
-				op = par(c(Gpart,list(mfrow=c(nr,nc))))
-
-				for (id in 1:min(ndom-nr*i,nr)+nr*i) {
-					for (it in indt) {
-						tt[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],
-							tunit)
-						matplotv(rmxv[,id,it,],etai,xlab=ss,ylab="eta",main=tt,
-							xlim=range(rmxv[,id,,]),ylim=yeta,col=cols)
-					}
-				}
-
-				dev.off()
-			}
-		}
-
-		if (length(lzmeand) >= j) {
-			# dims are [lat,lev,date,time]
-			# rmxv score: ll plot 6l
-			zrmxv = apply(lzmeand[[j]],c(2,4),rmx,na.rm=TRUE)
-			zrmxv = aperm(zrmxv,c(2:3,1))
-			if (! is.null(lzmeanr)) {
-				zrmxvr = apply(lzmeanr[[j]],c(2,4),rmx,na.rm=TRUE)
-				zrmxvr = aperm(zrmxvr,c(2:3,1))
-				zrmxv = array(c(zrmxv,zrmxvr),c(dim(zrmxv)[1:2],2*dim(zrmxv)[3]))
-			}
-
-			tt = sprintf("Score zon. mean, %s",nom)
-			nr = min(3,nl%/%2)
-			nc = min(2,nl%/%2)
-			if (nl == 1) nr = nc = 1
-			indl = as.integer(seq(1,nl,length.out=nr*nc))
-
-			png(sprintf("%s/scorez1_%s.png",pngd,ss))
-			op = par(c(Gpart,list(mfcol=c(nr,nc))))
-
-			for (il in indl) {
-				if (nl > 1) tt[2] = sprintf("level %d",frlow$ilev[il])
-				zt = matrix(zrmxv[il,,],nrow=length(ht))
-				matplott(ht,zt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
-				axis(1,ht6)
-			}
-
-			dev.off()
-
-			if (nl > 1) {
-				indt = which(apply(lzmeand[[j]],4,function(x) any(! is.na(x))))
-				nr = min(2,length(indt)%/%2)
-				nc = min(3,length(indt)%/%2)
-				if (length(indt) == 1) nr = nc = 1
-				if (length(indt) > nr*nc) indt = indt[seq(1,length(indt),len=nr*nc)]
-
-				png(sprintf("%s/scorevz1_%s.png",pngd,ss))
-				op = par(c(Gpart,list(mfrow=c(nr,nc))))
-
-				for (it in indt) {
-					tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
-					matplotv(zrmxv[,it,],etai,main=tt,ylim=yeta,xlab=ss,ylab="eta",col=cols)
-				}
-
-				dev.off()
-
-				nr = min(3,length(indt))
-				nc = 1
-				indt = as.integer(seq(1,length(htime),len=nr))
-				lat = sort(frlow$g4@theta)
-				zrmsev = apply(lzmeand[[j]],c(1:2,4),rms,na.rm=TRUE)
-
-				png(sprintf("%s/scorevz2_%s.png",pngd,ss))
-				op = par(c(Gparmt,list(mfrow=c(nr,nc))))
-
-				for (it in indt) {
-					tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
-					plotv(lat,etai,zrmsev[,,it],main=tt,ylim=yeta,xlab="Latitude",ylab="eta",
-						xaxt="n",las=0)
-					axis(1,lat20)
-				}
-
-				dev.off()
-			}
-		}
-
-		if (length(dates) < 2) next
-
-		cat("Scores for days\n")
-		indt = which(apply(qe,4,function(x) any(! is.na(x))))
-		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
-
-		dd = as.Date(as.character(dates),format="%Y%m%d")
-		indd = order(dd)
-		nr = length(indt)
-		nc = min(2,ndom)
-		rmxt = apply(lstatd[[j]],3:5,rmx,na.rm=TRUE)
-		rmxt = aperm(rmxt,c(2:4,1))
-		if (! is.null(lstatr)) {
-			rmxr = apply(lstatr[[j]],3:5,rmx,na.rm=TRUE)
-			rmxr = aperm(rmxr,c(2:4,1))
-			rmxt = array(c(rmxt,rmxr),c(dim(rmxt)[1:3],2*dim(rmxt)[4]))
-		}
-
-		# rmxt scoret: day t plot 3tx2
-		for (i in seq((ndom-1)%/%nc+1)-1) {
-			png(sprintf("%s/scoret%d_%s.png",pngd,i,ss))
-			op = par(c(Gpart,list(mfcol=c(nr,nc))))
-
-			for (id in 1:min(ndom-nc*i,nc)+nc*i) {
-				ylim = range(rmxt[id,,,],na.rm=TRUE)
-
-				for (it in indt) {
-					tt[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],
-						tunit)
-					matplott(dd[indd],rmxt[id,indd,it,],ylim=ylim,main=tt,xlab="Date",
-						ylab=ss,col=cols,xaxt="n")
-					axis.Date(1,dd,format="%Y%m%d")
-				}
-			}
-
-			dev.off()
-		}
-
-		if (nl > 1) {
-			# rmxvd rmsev: day v image 3tx2
-			ttd = sprintf("RMSE of %s",nom)
-			rmxvd = apply(lstatd[[j]],2:5,rms,na.rm=TRUE)
-
-			for (i in seq((ndom-1)%/%nc+1)-1) {
-				png(sprintf("%s/rmsevt%d_%s.png",pngd,i,ss))
-				op = par(c(Gparmt,list(mfcol=c(nr,nc))))
-
-				for (id in 1:min(ndom-nc*i,nc)+nc*i) {
-					br = prettyBreaks(rmxvd[,id,,indt[1:nr]],crop=TRUE)$breaks
-
-					for (it in indt) {
-						ttd[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],
-							tunit)
-						plotv(dd[indd],etai,t(rmxvd[,id,indd,it]),br,main=ttd,ylim=yeta,
-							xlab="Date",ylab="eta",xaxt="n",las=0)
-						axis.Date(1,dd,format="%Y%m%d")
-					}
-				}
-
-				dev.off()
+				dayx = array(lerr[[j]][,,4,i],dim(lerr[[j]])[1:2])
+				fe = setDataPart(fe,dayx)
+				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("dayx%s",prefix),main=tt,mnx=FALSE)
 			}
 		}
 	}

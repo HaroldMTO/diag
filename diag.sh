@@ -1,6 +1,6 @@
 #!/bin/sh
 
-diags=~/util/diag
+diag=~/util/diag
 
 usage()
 {
@@ -112,11 +112,16 @@ else
 	echo "--> sending output to $loc"
 fi
 
+type R > /dev/null 2>&1 || module -s load intel R > /dev/null 2>&1
+
 if [ $graph -eq 1 ]
 then
-	type R > /dev/null 2>&1 || module -s load intel R > /dev/null 2>&1
-	R --slave -f $diags/diag.R --args png=$loc ref=$ref mapstat=$mapstat $opt > $loc/diag.log
+	echo "Production of maps and figures for data and errors"
+	R --slave -f $diag/diag.R --args png=$loc ref=$ref mapstat=$mapstat $opt > $loc/diag.log
 fi
+
+echo "Production of scores"
+R --slave -f $diag/score.R --args png=$loc $opt > $loc/score.log
 
 ficdom=$conf/domain.txt
 if [ ! -s $ficdom ]
@@ -131,17 +136,20 @@ params=$(ls -1 $loc | grep -E 'map[1-9].+_\w+\.png$' | sed -re 's:.+_(\w+)\.png:
 echo "HTML files: $(cat $loc/steps.txt | wc -l) forecast steps
 domains: $doms"
 
+temph=$(mktemp -d htmlXXX)
+trap 'rm -r $temph' 0
+
 while read -a tt
 do
 	echo ${tt[*]} | grep -q " TRUE" && printf "\t<option>%s</option>\n" "${tt[*]}"
-done < $loc/steps.txt > $loc/steps.html
+done < $loc/steps.txt > $temph/steps.html
 
 for par in $params
 do
 	ficpar=$(dirname $loc)/$par.html
 	echo ". creating $ficpar"
 
-	rm -f $loc/*_$par.html $par.log
+	rm -f $temph/*_$par.html
 
 	echo ".. maps, hists and options (maph.html)"
 	it=0
@@ -153,14 +161,13 @@ do
 		base=$(echo ${tt[*]} | sed -re 's:base/step\: ([12][0-9]+) R([0-9]+) (\+[0-9]+\w*) .+:\1\2\3:')
 		step=$(echo ${tt[*]} | sed -re 's:base/step\: [12][0-9]+ R[0-9]+ \+([0-9]+\w*) .+:\1:')
 		title=$(echo ${tt[*]} | sed -re 's: \- graph.+::')
-		echo "$base / $step / $title" >> $par.log
 
 		for dom in $doms
 		do
 			echo "<table>"
 			echo "<tr><th>Maps, selection of levels</th><th>Cross-sections and diagrams</th>"
 			att="colspan='2'"
-			if [ -n "$ref" ]
+			if false && [ -n "$ref" ]
 			then
 				echo "<th>Maps for reference</th><th>Cross-sections and diagrams for ref</th>"
 				att="colspan='4'"
@@ -169,40 +176,51 @@ do
 			echo "</tr>"
 
 			# rows with name attribute (fig for images, title for row header)
-			echo "<tr><th name='title' $att>Param '$par' - $title - Domain $dom</th></tr>"
-			echo "<tr>"
+			echo "<tr><th name='title' $att>Domain $dom - $title</th></tr>"
 
-			for typ in map hist mapdiff histdiff
+			for suf in "" ref diff
 			do
-				fic=xxx$loc/$typ$it${dom}_$par.png_
-				[ -s $fic ] || fic=$loc/$typ$base${dom}_$par.png
-				[ -s $fic ] || continue
+				echo "<tr>"
 
-				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-				printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
+				for typ in map hist
+				do
+					fic=$loc/$typ$suf$base${dom}_$par.png
+					[ -s $fic ] || continue
+
+					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+					printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
+				done
+
+				echo "</tr>"
 			done
 
-			echo "</tr>"
-
-			cat $diags/step.html
+			cat $diag/step.html
 
 			[ $mapstat -eq 1 ] || continue
 
-			echo "<tr><th $att>Param '$par' (...) - min/max - Domain $dom</th></tr>"
-			echo "<tr>"
+			{
+			echo "<tr><th $att>Min/max of upper and lower levels - Domain $dom</th></tr>"
 
-			for typ in mapn mapx mapndiff mapxdiff
+			for suf in "" ref
 			do
-				fic=xxx$loc/$typ$it${dom}_$par.png_
-				[ -s $fic ] || fic=$loc/$typ$base${dom}_$par.png
-				[ -s $fic ] || continue
+				echo "<tr>"
 
-				printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-				printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
+				for typ in mapn mapx
+				do
+					fic=$loc/$typ$suf$base${dom}_$par.png
+					[ -s $fic ] || continue
+
+					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+					printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
+				done
+
+				echo "</tr>"
 			done
+			} > $temph/mnx.html
 
-			echo "</tr>"
+			grep -qE '<img .+ src=' $temph/mnx.html && cat $temph/mnx.html
 
+			{
 			for stat in bias rmse errx dayx
 			do
 				echo "<tr><th colspan='2'>Param '$par' $stat - Domain $dom</th></tr>"
@@ -210,43 +228,45 @@ do
 
 				for typ in map$stat hist$stat
 				do
-					fic=xxx$loc/$typ$it${dom}_$par.png_
-					[ -s $fic ] || fic=$loc/$typ$step${dom}_$par.png
+					fic=$loc/$typ$step${dom}_$par.png
 					[ -s $fic ] || continue
 
 					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-					printf "\t<option>%s</option>\n" $fic >> $loc/$typ${dom}_$par.html
+					printf "\t<option>%s</option>\n" $fic >> $temph/$typ${dom}_$par.html
 				done
 
 				echo "</tr>"
 			done
-		done > $loc/idom.html
+			} > $temph/stat.html
 
-		if grep -qE '<img .+ src=' $loc/idom.html && [ ! -s $loc/idom.html.save ]
+			grep -qE '<img .+ src=' $temph/stat.html && cat $temph/stat.html
+		done > $temph/idom.html
+
+		if grep -qE '<img .+ src=' $temph/idom.html && [ ! -s $temph/idom.html.save ]
 		then
-			cat $loc/idom.html
-			cp $loc/idom.html $loc/idom.html.save
+			cat $temph/idom.html
+			cp $temph/idom.html $temph/idom.html.save
 			echo "</table>"
 		fi
-	done < $loc/steps.txt > $loc/maph.html
+	done < $loc/steps.txt > $temph/maph.html
 
-	rm -f $loc/idom.html.save
+	rm -f $temph/idom.html.save
 	echo ".. HTML select (stat.html)" # with name attributes step and map
 	{
-	sed -re 's:TAG NAME:step:' -e "/TAG OPT/r $loc/steps.html" $diags/select.html
+	sed -re 's:TAG NAME:step:' -e "/TAG OPT/r $temph/steps.html" $diag/select.html
 	for dom in $doms
 	do
 		# same order as table images
-		for typ in map hist mapdiff histdiff mapn mapx mapndiff mapxdiff \
+		for typ in map hist mapref histref mapdiff histdiff mapn mapx mapnref mapxref \
 			mapbias histbias maprmse histrmse maperrx histerrx mapdayx histdayx
 		do
-			fic=$loc/$typ${dom}_$par.html
+			fic=$temph/$typ${dom}_$par.html
 			[ -s $fic ] || continue
 
-			sed -re 's:TAG NAME:map:' -e "/TAG OPT/r $fic" $diags/select.html
+			sed -re 's:TAG NAME:map:' -e "/TAG OPT/r $fic" $diag/select.html
 		done
 	done
-	} > $loc/stat.html
+	} > $temph/stat.html
 
 	echo ".. Stats and scores (score.html)"
 	typd=(stat statv err errv score scorev scorez scorevz scoret rmsevt)
@@ -256,24 +276,59 @@ do
 	i=0
 	while [ $i -lt ${#typd[*]} ]
 	do
-		echo ${typd[i]} | grep -q score && th="<p>ref data (blue): $cmp</p>" || th=""
+		echo ${typd[i]} | grep -q score && th="<p>Ref data (blue): $cmp</p>" || th=""
+		[ "$cmp" ] || th=""
 		echo "<h2>${titd[i]} on domains</h2>
 $th
 <table>
 <tr>"
-
+		n=0
 		for ficp in $(ls -1 $loc | grep -E "${typd[i]}[0-9]+_$par.png" | sort)
 		do
+			if [ $n -eq 2 ]
+			then
+				echo -e "</tr>\n<tr>"
+				n=0
+			fi
+
 			printf "\t<td><img src=\"%s\" alt=\"missing image\"/></td>\n" $loc/$ficp
+			n=$((n+1))
 		done
 
 		echo "</tr>
 </table>"
 		i=$((i+1))
-	done > $loc/score.html
+	done > $temph/score.html
 
 	echo ".. fill par template"
-	sed -re "s:TAG PAR:$par:" -e "/TAG MAP/r $loc/maph.html" \
-		-e "/TAG STAT/r $loc/stat.html" -e "/TAG SCORE/r $loc/score.html" \
-		$diags/par.html > $ficpar
+	sed -re "s:TAG PAR:$par:" -e "s:TAG REF:$ref:" -e "/TAG MAP/r $temph/maph.html" \
+		-e "/TAG STAT/r $temph/stat.html" -e "/TAG SCORE/r $temph/score.html" \
+		$diag/par.html > $ficpar
 done
+
+echo ". creating params.html"
+typd=(score scorez)
+titd=("Scores of forecasts" "Scores of zonal mean")
+i=0
+while [ $i -lt ${#typd[*]} ]
+do
+	echo "<h2>${titd[i]} on domains</h2>
+<table>"
+
+	for par in $params
+	do
+		echo "<tr>"
+		for ficp in $(ls -1 $loc | grep -E "${typd[i]}[0-9]+_$par.png" | sort)
+		do
+			printf "\t<td><img src=\"%s\" alt=\"missing image\"/></td>\n" $loc/$ficp
+		done
+
+		echo "</tr>"
+   done
+
+	echo "</table>"
+	i=$((i+1))
+done > $temph/score.html
+
+sed -re "s:TAG PAR:multi parameter:" -e "/TAG SCORE/r $temph/score.html" $diag/par.html \
+	> params.html

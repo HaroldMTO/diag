@@ -57,11 +57,6 @@ for i,arg in enumerate(args):
 import epygram
 import numpy
 import time
-import concurrent.futures as cf
-
-def sp2gp(f):
-	f.sp2gp()
-	return f
 
 epygram.init_env()
 
@@ -215,8 +210,8 @@ elif tag != "":
 			ginfo = False
 
 		if ff.spectral:
-			#ffsp.append(ff)
-			#continue
+			ffsp.append(ff)
+			continue
 
 			if prof: t = os.times().elapsed
 			splen = len(ff.data)
@@ -245,7 +240,6 @@ elif tag != "":
 	# (debug) mark end of data with one known integer value
 	if con != None:
 		if len(ffsp) > 0:
-			#exe = cf.ThreadPoolExecutor(max_workers=4)
 			if prof: t = os.times().elapsed
 			for ff in ffsp:
 				splen = len(ff.data)
@@ -254,20 +248,12 @@ elif tag != "":
 					if prof: t1 = t1+(os.times().elapsed-t)
 					print("Spectral/gridpoint sizes:",splen,ff.data.size,"- fields:",len(ffsp))
 					finfo = False
-				#f = exe.submit(ff.sp2gp)
-				#f.result()
 
-			#with exe:
-			#	f = exe.submit(sp2gp,ffsp)
-			#	f.result()
-			if prof: t2 = t2+(os.times().elapsed-t)
-
-			for ff in ffsp:
 				data = ff.data
 				if (not islam): data = data.compressed()
 				if prof: t = os.times().elapsed
 				data.tofile(con)
-				if prof: t3 = t3+(os.times().elapsed-t)
+				if prof: t2 = t2+(os.times().elapsed-t)
 
 		numpy.array(nf).tofile(con)
 
@@ -275,4 +261,3 @@ if con != None:
 	con.close()
 
 if prof: print("times sp2gp(1)/sp2gp/tofile:",round(t1,3),round(t2,3),round(t3,3))
-
