@@ -37,6 +37,24 @@ Dependencies:
 "
 }
 
+addtd()
+{
+	local typ fic
+
+	echo "<tr>"
+
+	for typ in $*
+	do
+		fic=$loc/$typ$suf$base${dom}_$par.png
+		[ -s $fic ] || continue
+
+		printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+		printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
+	done
+
+	echo "</tr>"
+}
+
 if [ $# -eq 0 ] || echo " $*" | grep -qE ' \-h\>'
 then
 	usage
@@ -180,18 +198,7 @@ do
 
 			for suf in "" ref diff
 			do
-				echo "<tr>"
-
-				for typ in map hist
-				do
-					fic=$loc/$typ$suf$base${dom}_$par.png
-					[ -s $fic ] || continue
-
-					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-					printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
-				done
-
-				echo "</tr>"
+				addtd map hist
 			done
 
 			cat $diag/step.html
@@ -203,18 +210,7 @@ do
 
 			for suf in "" ref
 			do
-				echo "<tr>"
-
-				for typ in mapn mapx
-				do
-					fic=$loc/$typ$suf$base${dom}_$par.png
-					[ -s $fic ] || continue
-
-					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-					printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
-				done
-
-				echo "</tr>"
+				addtd mapn mapx
 			done
 			} > $temph/mnx.html
 

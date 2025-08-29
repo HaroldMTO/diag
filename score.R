@@ -205,6 +205,11 @@ for (cmp in c(".",cargs$cmp)) {
 
 		eta = frlow$eta
 		ilev = frlow$ilev
+		indt = order(htime)
+		if (length(indt) > 1 && any(indt != seq(along=htime))) {
+			for (i in seq(along=lstatd)) lstatd[[i]] = lstatd[[i]][,,,,indt,drop=FALSE]
+			htime = htime[indt]
+		}
 	} else {
 		lstatd = loadStat(ficsave,frlow,params,doms,dates,htime)
 		if (is.null(lstatd)) stop("no stat in common\n")
