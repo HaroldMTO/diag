@@ -370,7 +370,8 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE,mc.cores=
 	f = setDataPart(f,data)
 	if (! lread) return(f)
 
-	# ppp is just for fun...
+	# quad is nice, linear is cheap, ppp is just for fun...
+	#meth = "quad"
 	meth = "linear"
 	if (length(f) < 2e6) {
 		h = hist(f,plot=FALSE)
@@ -396,7 +397,7 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE,mc.cores=
 	# if selev, dim(f)[2] > 1 && length(f@eta) != length(ilev)
 	if (selev) {
 		cat("--> interpolation from",length(f@eta),"levels - method:",meth,"\n")
-		f = interpAB(f,frlow$eta[ilev],method="quad")
+		f = interpAB(f,frlow$eta[ilev],method=meth)
 	}
 
 	data = getDataPart(f)
@@ -800,7 +801,8 @@ mapexi = function(f,desc,doms,prob=seq(0,100)/100,prefix=character(),main,np=4,
 				if (length(Gindl) == 2) indl = c(1,Gindl,nl)
 				pt = system.time(for (il in indl) {
 					tt[2] = sprintf("%s lev %d (eta %g)",main[2],il,round(f@eta[il],2))
-					mapdom(d4,xy@grid,xy@ind,xy[,il],main=tt,palette=desc$palette,quiet=TRUE,...)
+					mapdom(d4,xy@grid,xy@ind,xy[,il],main=tt,palette=desc$palette,
+						quiet=il > indl[1],...)
 					mapsegments(domin,lat=mean(domin@ylim),long=mean(domin@xlim),col="darkgrey")
 				})
 				if (prof) cat("map time:",pt,"\n")
@@ -1335,6 +1337,9 @@ for (id in seq(along=dates)) {
 			frlow$ilev = seq(nlev)
 		}
 
+		cat("eta:",signif(frlow$eta),"\n")
+		if (length(frlow$ilev) < nlev) cat("eta[ilev]:",signif(frlow$eta[frlow$ilev]),"\n")
+
 		if (! file.exists(ficref)) {
 			cat("--> no ref file",ficref,"\n")
 			framo = NULL
@@ -1349,8 +1354,9 @@ for (id in seq(along=dates)) {
 				ind = findInterval(frlow$eta[frlow$ilev],framo$eta)
 				stopifnot(all(0 < ind & ind <= framo$nlevel))
 				# for linear interpolation, each level and the following one
+				ind = unique(sort(c(ind,ind+1)))
 				# for quad interpolation, each level and a few surrounding ones
-				ind = unique(sort(c(ind-1,ind,ind+1,ind+2)))
+				#ind = unique(sort(c(ind-1,ind,ind+1,ind+2)))
 				framo$ilev = ind[0 < ind & ind <= framo$nlevel]
 			}
 
@@ -1383,18 +1389,17 @@ for (id in seq(along=dates)) {
 			if (n == 4 || j == npar) {
 				ld = mccollect(lc)
 				try(parallel:::mckill(lc,15),silent=TRUE)
-				for (k in 1:n) {
-					if (is.null(ld[[k]])) stop("--> field not found in FA/GRIB file\n")
-					ldata[[j-n+k]] = ld[[k]]
-				}
+				if (any(sapply(ld,is.null))) stop("--> fields not found in FA/GRIB file\n")
+				for (k in 1:n) ldata[[j-n+k]] = ld[[k]]
 
 				rm(lc,ld)
 				lc = list()
 			}
 		}
 
+		ldatao = list()
 		if (! is.null(framo)) {
-			ldatao = lc = list()
+			lc = list()
 			selev = length(framo$ilev) < length(framo$eta)
 			for (j in seq(npar)) {
 				if (isbin[i] || regexpr("^\\.",desc$faname[j]) > 0) next
@@ -1403,7 +1408,7 @@ for (id in seq(along=dates)) {
 				patto = FApattern(desc$ltype[j],desc$faname[j],framo$ilev,selev)
 				#if (patto != patt) cat("--> new pattern for ref:",patto,"\n")
 
-				cat(". get ref fields matching pattern",patt,"\n")
+				cat(". get ref fields matching pattern",patto,"\n")
 				if (length(ldatao) >= j) stopifnot(is.null(ldatao[[j]]))
 				n = length(lc)+1
 				lc[[n]] = mcparallel(getField(ficref,patto,ss,framo,frlow,cache.alt=TRUE,
@@ -1411,10 +1416,8 @@ for (id in seq(along=dates)) {
 				if (n == 4 || j == npar) {
 					ld = mccollect(lc)
 					try(parallel:::mckill(lc,15),silent=TRUE)
-					for (k in 1:n) {
-						if (is.null(ld[[k]])) stop("--> field not found in FA/GRIB file\n")
-						ldatao[[j-n+k]] = ld[[k]]
-					}
+					if (any(sapply(ld,is.null))) stop("--> ref fields not found in FA/GRIB file\n")
+					for (k in 1:n) ldatao[[j-n+k]] = ld[[k]]
 
 					rm(lc,ld)
 					lc = list()
@@ -1526,7 +1529,7 @@ for (id in seq(along=dates)) {
 
 			fd = setDataPart(f,f-fo)
 
-			cat("Compute stats and graphics for domains\n")
+			cat("Compute stats (diff) and graphics (ref) for domains\n")
 			tto = c(tt[1],strftime(date,"valid: %Y%m%d %Hh"))
 			tt[1] = sprintf("Diff of %s",tt[1])
 			mapexi(fo,desc[j,],doms,0:1,prefix=prefixo,main=tto,mnx=mapstat,mc.cores=4)

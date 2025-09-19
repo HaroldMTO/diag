@@ -9,13 +9,16 @@ Description:
 	Produce a list of diagnostics on model forecasts
 
 Usage:
-	diag.sh [-conf CONFIG] [-o PNG] [-ref PATH] [-h]
+	diag.sh [-conf CONFIG] [-o PNG] [-ref PATH] [-nograph] [-nomapstat] [-opt OPT] [-h]
 
 Arguments:
 	CONFIG: path to a directory containing files for settings: param.txt, domain.txt and \
 file.txt as mandatory files, and optionally level.txt and date.txt (see details)
 	PNG: path to output files (graphics + some HTML files)
 	PATH: path where to find reference files
+	-nograph: do not run the diagnostic step again (diag.R) when already done
+	-nomapstat: do not produce maps of statistical analysis
+	OPT: options to pass to diag.R and score.R, as a list of 'key=value:...' elements
 	-h: print this help and exits normally
 
 Details:
@@ -93,6 +96,10 @@ do
 		-nomapstat)
 			mapstat=0
 			;;
+		-opt)
+			opt=$2
+			shift
+			;;
 		*)
 			echo "Warning: unknown option '$1', ignored" >&2
 			;;
@@ -116,10 +123,9 @@ then
 	ls -d $ref > /dev/null
 fi
 
-opt=""
 if [ -n "$cmp" ]
 then
-	opt="cmp=$cmp"
+	opt="$opt cmp=$cmp"
 fi
 
 if [ -n "$loc" ]
@@ -138,7 +144,7 @@ then
 	R --slave -f $diag/diag.R --args png=$loc ref=$ref mapstat=$mapstat $opt > $loc/diag.log
 fi
 
-echo "Production of scores"
+echo "Production of scores $opt"
 R --slave -f $diag/score.R --args png=$loc $opt > $loc/score.log
 
 ficdom=$conf/domain.txt

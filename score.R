@@ -50,18 +50,20 @@ rmx = function(x,...)
 	c(rms=rms(x,...),ave=mean(x,...),q90=quantile(abs(x),prob=.9,...))
 }
 
-matplott = function(x,y,col=1,pch="+",lty=1:3,legend=c("RMS","bias","Q9"),...)
+matplott = function(x,y,col=1,pch="+",lty=1:3,x.leg="topleft",legend=c("RMS","bias","Q9"),
+	...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(h=0,col="darkgrey")
-	if (! is.null(legend)) legend("topleft",legend,col=col,lty=lty,pch=pch,bg="transparent")
+	if (! is.null(legend)) legend(x.leg,legend,col=col,lty=lty,pch=pch,bg="transparent")
 }
 
-matplotv = function(x,y,col=1,pch="+",lty=1:3,legend=c("RMS","bias","Q9"),...)
+matplotv = function(x,y,col=1,pch="+",lty=1:3,x.leg="topleft",legend=c("RMS","bias","Q9"),
+	...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(v=0,col="darkgrey")
-	if (! is.null(legend)) legend("topleft",legend,col=col,lty=lty,pch=pch,bg="transparent")
+	if (! is.null(legend)) legend(x.leg,legend,col=col,lty=lty,pch=pch,bg="transparent")
 }
 
 loadStat = function(filename,framep,paramsp,domsp,datesp,htimep)
@@ -317,14 +319,12 @@ for (j in seq(along=lstatd)) {
 	if (nl > 1) {
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
 		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
+
+		nc = length(indt)
 		if (etahigh > 0) {
 			indl = which(etai < etahigh)
 			if (length(indl) < 3) indl = which(etai < .5)
 			if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
-		}
-
-		nc = length(indt)
-		if (etahigh > 0) {
 			nr = 2
 			nj = 1
 			tth = tt
@@ -434,9 +434,19 @@ for (j in seq(along=lstatd)) {
 		tt = sprintf("Score of %s",nom)
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
 		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
-		nr = min(2,ndom)
-		if (wide) nr = 1
 		nc = length(indt)
+		if (etahigh > 0) {
+			indl = which(etai < etahigh)
+			if (length(indl) < 3) indl = which(etai < .5)
+			if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
+			nr = 2
+			tth = tt
+			tth[1] = sprintf("..., high levels",nom)
+		} else if (wide) {
+			nr = 1
+		} else {
+			nr = min(2,ndom)
+		}
 
 		# rmxv scorev: v plot 2x3t
 		for (i in seq((ndom-1)%/%nr+1)-1) {
@@ -444,10 +454,20 @@ for (j in seq(along=lstatd)) {
 			par(c(Gpart,list(mfrow=c(nr,nc))))
 
 			for (id in 1:min(ndom-nr*i,nr)+nr*i) {
+				if (etahigh > 0) {
+					for (it in indt) {
+						tth[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
+						rmxvl = matrix(rmxv[indl,id,it,,],nrow=length(indl))
+						matplotv(rmxvl,etai[indl],x.leg="topright",xlab=ss,ylab="eta",main=tth,
+							ylim=c(etahigh,yeta[2]))
+					}
+				}
+
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 					rmxvl = matrix(rmxv[,id,it,,],nrow=nl)
-					matplotv(rmxvl,etai,xlab=ss,ylab="eta",main=tt,ylim=yeta,col=cols)
+					matplotv(rmxvl,etai,x.leg="topright",xlab=ss,ylab="eta",main=tt,ylim=yeta,
+						col=cols)
 				}
 			}
 
@@ -510,7 +530,8 @@ for (j in seq(along=lstatd)) {
 			for (it in indt) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
 				zv = matrix(zrmxv[,it,,],nrow=nl)
-				matplotv(zv,etai,main=tt,ylim=yeta,xlab=ss,ylab="eta",col=cols)
+				matplotv(zv,etai,x.leg="topright",ylim=yeta,xlab=ss,ylab="eta",main=tt,
+					col=cols)
 			}
 
 			dev.off()
