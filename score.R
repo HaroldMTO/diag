@@ -47,19 +47,24 @@ rms = function(x,...)
 
 rmx = function(x,...)
 {
-	c(rms=rms(x,...),ave=mean(x,...),q90=quantile(abs(x),prob=.9,...))
+	m = mean(x,...)
+	x2 = x-m
+	a = max(abs(x2))/2
+	x2[abs(x2) < a] = 0
+	x2 = x2+m
+	c(rms=rms(x,...),ave=m,q90=quantile(abs(x),prob=.9,...),rms2=rms(x2,...))
 }
 
-matplott = function(x,y,col=1,pch="+",lty=1:3,x.leg="topleft",legend=c("RMS","bias","Q9"),
-	...)
+matplott = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",
+	legend=c("RMS","bias","Q9","X2"),...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(h=0,col="darkgrey")
 	if (! is.null(legend)) legend(x.leg,legend,col=col,lty=lty,pch=pch,bg="transparent")
 }
 
-matplotv = function(x,y,col=1,pch="+",lty=1:3,x.leg="topleft",legend=c("RMS","bias","Q9"),
-	...)
+matplotv = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",
+	legend=c("RMS","bias","Q9","X2"),...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(v=0,col="darkgrey")

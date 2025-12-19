@@ -547,6 +547,12 @@ mapdom = function(dom,grid,ind,data,main=NULL,scale=TRUE,mar=c(2,2,3,5),mgp=c(2,
 		}
 	}
 
+	# data has already been selected but not grid
+	if (length(ind) > 0) {
+		grid = grid[ind]
+		stopifnot(length(grid) == length(ind))
+	}
+
 	mappoints(grid,ind,data,...)
 
 	lines(l)
@@ -746,7 +752,7 @@ mapext = function(d4,xy,prefix,dom,desc,ext,main,mc.cores=1,...)
 	dev.off()
 }
 
-mapexi = function(f,desc,doms,prob=seq(0,100)/100,prefix=character(),main,np=4,
+mapexi = function(f,desc,doms,prefix=character(),prob=seq(0,100)/100,main,np=4,
 	mnx=TRUE,force=FALSE,mc.cores=1,...)
 {
 	nl = length(f@eta)
@@ -835,9 +841,8 @@ mapexi = function(f,desc,doms,prob=seq(0,100)/100,prefix=character(),main,np=4,
 
 		if (! mnx || nl < 4) next
 
-		et = system.time(mapext(d4,xy,prefix,dom,desc,ext="min",main[2],mc.cores=mc.cores,...))
-		if (prof) cat("extreme time:",et,"\n")
-		mapext(d4,xy,prefix,dom,desc,ext="max",main[2],mc.cores=mc.cores,...)
+		mapext(d4,xy,prefix,dom,desc,ext="min",main[2],mc.cores=mc.cores,quiet=TRUE,...)
+		mapext(d4,xy,prefix,dom,desc,ext="max",main[2],mc.cores=mc.cores,quiet=TRUE,...)
 	}
 
 	qv
@@ -940,7 +945,8 @@ addrmxd = function(rmxd,data,nrmxd,id,parallel=FALSE)
 	if (nrmxd == 0) {
 		rmxd[,1] = data^2
 		rmxd[,2] = data
-		rmxd[,3] = abs(data)
+		m = mean(data,na.rm=TRUE)
+		rmxd[,3] = abs(data-m)
 		rmxd[,4] <- 1
 	} else if (parallel) {
 		# dependence on rmxd[,3]: rmxd[,4] must be done before
@@ -957,27 +963,27 @@ addrmxd = function(rmxd,data,nrmxd,id,parallel=FALSE)
 		rm(lc)
 	} else {
 		# dependence on rmxd[,3]: rmxd[,4] must be done before
-		ind = which(abs(data) > rmxd[,3])
+		m = mean(data,na.rm=TRUE)
+		ind = which(abs(data-m) > rmxd[,3])
 		rmxd[ind,4] = id
 		rmxd[,1] = rmxd[,1]+data^2
 		rmxd[,2] = rmxd[,2]+data
-		rmxd[,3] = pmax(rmxd[,3],abs(data))
+		rmxd[,3] = pmax(rmxd[,3],abs(data-m))
 	}
 
 	rmxd
 }
 
+# this forces the names of saved objects to be these ones
+saveStatraw = function(filename,frlow,params,doms,dates,htime,lstatd,lzmeand)
+{
+	save(frlow,params,doms,dates,htime,lstatd,lzmeand,file=filename)
+}
+
 saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp,lzmeanp)
 {
 	if (! file.exists(filename)) {
-		frlow = framep
-		params = paramsp
-		doms = domsp
-		dates = datesp
-		htime = htimep
-		lstatd = lstatdp
-		lzmeand = lzmeanp
-		save(frlow,params,doms,dates,htime,lstatd,lzmeand,file=filename)
+		saveStatraw(filename,framep,paramsp,domsp,datesp,htimep,lstatdp,lzmeanp)
 		return()
 	}
 
@@ -1337,8 +1343,8 @@ for (id in seq(along=dates)) {
 			frlow$ilev = seq(nlev)
 		}
 
-		cat("eta:",signif(frlow$eta),"\n")
-		if (length(frlow$ilev) < nlev) cat("eta[ilev]:",signif(frlow$eta[frlow$ilev]),"\n")
+		cat("eta:",signif(frlow$eta,3),"\n")
+		if (length(frlow$ilev) < nlev) cat("eta[ilev]:",signif(frlow$eta[frlow$ilev],3),"\n")
 
 		if (! file.exists(ficref)) {
 			cat("--> no ref file",ficref,"\n")
@@ -1477,7 +1483,7 @@ for (id in seq(along=dates)) {
 			cat("Compute stats and graphics for domains\n")
 			tt = desc$longname[j]
 			tt[2] = sprintf("on %s +%s",base,hh)
-			qv = mapexi(f,desc[j,],doms,prefix=prefixp,main=tt,mnx=mapstat,mc.cores=4)
+			qv = mapexi(f,desc[j,],doms,prefixp,main=tt,mnx=mapstat,mc.cores=4)
 			if (is.null(lstat[[j]])) lstat[[j]] = statarray(qv,dates,dff$file)
 			stopifnot(all(dim(qv) == dim(lstat[[j]])[1:3]))
 			lstat[[j]][,,,id,i] = qv
@@ -1532,8 +1538,8 @@ for (id in seq(along=dates)) {
 			cat("Compute stats (diff) and graphics (ref) for domains\n")
 			tto = c(tt[1],strftime(date,"valid: %Y%m%d %Hh"))
 			tt[1] = sprintf("Diff of %s",tt[1])
-			mapexi(fo,desc[j,],doms,0:1,prefix=prefixo,main=tto,mnx=mapstat,mc.cores=4)
-			qv = mapexi(fd,descb[j,],doms,prefix=prefixd,main=tt,mnx=FALSE,mc.cores=4)
+			mapexi(fo,desc[j,],doms,prefixo,main=tto,mnx=mapstat,mc.cores=4)
+			qv = mapexi(fd,descb[j,],doms,prefixd,main=tt,mnx=FALSE,mc.cores=4)
 
 			cat("Compute zonal mean\n")
 			t1 = mcparallel(zonalmean(f))
@@ -1583,7 +1589,7 @@ for (id in seq(along=dates)) {
 			j2 = match(cp$symbol,desc2$symbol)
 			tt = desc2$longname[j2]
 			tt[2] = sprintf("on %s +%s",as.character(fc@base,"%Y%m%d R%H"),hh)
-			qv = mapexi(fcomp,desc2[j2,],doms,prefix=prefixp,main=tt)
+			qv = mapexi(fcomp,desc2[j2,],doms,prefixp,main=tt)
 			if (length(lstat2) < j2 || is.null(lstat2[[j2]])) {
 				lstat2[[j2]] = statarray(qv,dates,dff$file)
 				lerr[[j]] = statarray(fd,c("rmse","bias","errx","dayx"),dff$file)
@@ -1599,8 +1605,8 @@ for (id in seq(along=dates)) {
 
 			tto[1] = tt[1]
 			tt[1] = sprintf("Diff of %s",tt[1])
-			mapexi(fcompo,desc2[j2,],doms,0:1,prefix=prefixo,main=tto,mnx=mapstat,mc.cores=4)
-			qv = mapexi(fd,desc2b[j2,],doms,prefix=prefixd,main=tt,mnx=FALSE,mc.cores=4)
+			mapexi(fcompo,desc2[j2,],doms,prefixo,main=tto,mnx=mapstat,mc.cores=4)
+			qv = mapexi(fd,desc2b[j2,],doms,prefixd,main=tt,mnx=FALSE,mc.cores=4)
 			if (length(lstat2d) < j2 || is.null(lstat2d[[j2]])) {
 				lstat2d[[j2]] = statarray(qv,dates,dff$file)
 			}
@@ -1660,7 +1666,7 @@ if (all((ht6-ht6[1])%%5 == 0)) {
 	ht6 = pretty(ht/tfreq,7)*tfreq
 }
 
-lat20 = pretty(sort(frlow$g4@theta),7)
+#lat20 = pretty(sort(frlow$g4@theta),7)
 etai = frlow$eta[frlow$ilev]
 yeta = rev(range(frlow$eta))
 
@@ -1792,7 +1798,7 @@ if (any(sapply(lstatd,is.array))) {
 			}
 
 			for (i in seq(along=dff$file)) {
-				if (! dff$graph[i]) next
+				if (! dff$graph[i] || nerr[j,i] == 0) next
 
 				frlow$fc = frame.save$fc
 				frlow$fc@step = htime[i]
@@ -1801,24 +1807,24 @@ if (any(sapply(lstatd,is.array))) {
 				tt[2] = sprintf("step +%s",formatStep(fc@step,"h"))
 
 				prefix = character()
-				if (dff$graph[i]) prefix = formatStep(fc@step)
+				if (dff$graph[i]) prefix = formatStep(fc@step,"h")
 
 				cat(". bias, RMSE, errmax and index of errmax for",dff$file[i],"\n")
 				bias = array(lerr[[j]][,,2,i]/nerr[j,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,bias)
-				mapexi(fe,descb[j,],doms,0:1,prefix=sprintf("bias%s",prefix),main=tt,mnx=FALSE)
+				mapexi(fe,descb[j,],doms,sprintf("bias%s",prefix),main=tt,mnx=FALSE)
 
 				rmse = array(sqrt(lerr[[j]][,,1,i]/nerr[j,i]),dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,rmse)
-				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("rmse%s",prefix),main=tt,mnx=FALSE)
+				mapexi(fe,desc[j,],doms,sprintf("rmse%s",prefix),main=tt,mnx=FALSE)
 
 				errx = array(lerr[[j]][,,3,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,errx)
-				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("errx%s",prefix),main=tt,mnx=FALSE)
+				mapexi(fe,desc[j,],doms,sprintf("errx%s",prefix),main=tt,mnx=FALSE)
 
 				dayx = array(lerr[[j]][,,4,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,dayx)
-				mapexi(fe,desc[j,],doms,0:1,prefix=sprintf("dayx%s",prefix),main=tt,mnx=FALSE)
+				mapexi(fe,desc[j,],doms,sprintf("dayx%s",prefix),main=tt,mnx=FALSE)
 			}
 		}
 	}

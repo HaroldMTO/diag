@@ -1,18 +1,19 @@
-plotb = function(x,y,lty=1,col="bisque",pch="+",ylim=NULL,...)
+plotb = function(x,y,range=3,lty=1,col="bisque",pch="+",ylim=NULL,...)
 {
 	if (is.null(ylim)) ylim = range(boxplot(y,outline=FALSE,plot=FALSE)$stats)
 	plot(x,colMeans(y),type="l",ylim=ylim,...)
 	w = diff(par("usr")[1:2])/(1.5*length(x)+2)
-	boxplot(y,col=col,lty=lty,pch=pch,pars=list(boxwex=w),add=TRUE,at=x,xaxt="n",yaxt="n")
+	boxplot(y,range=range,col=col,lty=lty,pch=pch,pars=list(boxwex=w),add=TRUE,at=x,
+		xaxt="n",yaxt="n")
 }
 
-plotbv = function(x,y,lty=1,col="bisque",pch="+",xlim=NULL,...)
+plotbv = function(x,y,range=3,lty=1,col="bisque",pch="+",xlim=NULL,...)
 {
 	if (is.null(xlim)) xlim = range(boxplot(x,outline=FALSE,plot=FALSE)$stats)
 	plot(colMeans(x),y,type="l",xlim=xlim,...)
 	w = diff(par("usr")[3:4])/(1.5*length(y)+2)
-	boxplot(x,col=col,lty=lty,pch=pch,pars=list(boxwex=w),horizontal=TRUE,add=TRUE,at=y,
-		xaxt="n",yaxt="n")
+	boxplot(x,range=range,col=col,lty=lty,pch=pch,pars=list(boxwex=w),horizontal=TRUE,
+		add=TRUE,at=y,xaxt="n",yaxt="n")
 }
 
 plotv = function(x,y,z,breaks,ylim=rev(range(y,finite=TRUE)),xaxs="i",yaxs="i",

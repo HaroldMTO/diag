@@ -145,7 +145,7 @@ then
 fi
 
 echo "Production of scores $opt"
-R --slave -f $diag/score.R --args png=$loc $opt > $loc/score.log
+R --slave -f $diag/score.R --args png=$loc $opt
 
 ficdom=$conf/domain.txt
 if [ ! -s $ficdom ]
@@ -185,6 +185,7 @@ do
 		base=$(echo ${tt[*]} | sed -re 's:base/step\: ([12][0-9]+) R([0-9]+) (\+[0-9]+\w*) .+:\1\2\3:')
 		step=$(echo ${tt[*]} | sed -re 's:base/step\: [12][0-9]+ R[0-9]+ \+([0-9]+\w*) .+:\1:')
 		title=$(echo ${tt[*]} | sed -re 's: \- graph.+::')
+		echo ".. base/step: '$base' '$step'" > $temph/diag.log
 
 		for dom in $doms
 		do
@@ -222,6 +223,8 @@ do
 
 			grep -qE '<img .+ src=' $temph/mnx.html && cat $temph/mnx.html
 
+			istep=$(echo $step | sed -re 's:[hmj]$::')
+
 			{
 			for stat in bias rmse errx dayx
 			do
@@ -230,7 +233,9 @@ do
 
 				for typ in map$stat hist$stat
 				do
+					# bug on step, use istep
 					fic=$loc/$typ$step${dom}_$par.png
+					[ -s $fic ] || fic=$loc/$typ$istep${dom}_$par.png
 					[ -s $fic ] || continue
 
 					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
@@ -251,6 +256,8 @@ do
 			echo "</table>"
 		fi
 	done < $loc/steps.txt > $temph/maph.html
+
+	cat $temph/diag.log
 
 	rm -f $temph/idom.html.save
 	echo ".. HTML select (stat.html)" # with name attributes step and map
