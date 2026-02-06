@@ -4,10 +4,16 @@ library(maps)
 library(mapproj)
 library(parallel)
 library(mffield)
+library(mfnode)
 
 Gvp0 = 101325
 
 source(sprintf("%s/plot.R",Gdiag))
+
+png = function(filename="Rplot%03d.png",width=560,height=560,...)
+{
+	grDevices::png(filename,width,height,...)
+}
 
 readDom = function(filename,domd=list())
 {
@@ -534,9 +540,8 @@ mapdom = function(dom,grid,ind,data,main=NULL,scale=TRUE,mar=c(2,2,3,5),mgp=c(2,
 	box()
 
 	if (scale) {
-		ymax = max(abs(data),na.rm=TRUE)
-		scal = 10^-round(log10(ymax/1.5))
-		if (.001 <= scal && scal < 1 || is.infinite(scal)) scal = 1
+		scal = scale10(data)
+		if (is.infinite(scal)) scal = 1
 		if (scal != 1) {
 			data = scal*data
 			if (length(main) > 0) {
@@ -718,7 +723,7 @@ mapext = function(d4,xy,prefix,dom,desc,ext,main,mc.cores=1,...)
 	il = (nl+1)%/%2
 
 	png(ficpng)
-	par(mfrow=c(2,2),cex=.7)
+	par(mfrow=c(2,2),cex=.75)
 
 	par(Gparm)
 	if (mc.cores == 1) {
@@ -819,20 +824,20 @@ mapexi = function(f,desc,doms,prefix=character(),prob=seq(0,100)/100,main,np=4,
 
 		ficpng = sprintf("%s/hist%s%s_%s.png",pngd,prefix,dom,desc$symbol)
 		if (! file.exists(ficpng) || force) {
-			tt[2] = main[2]
+			tt[2] = sprintf("domain %s, %s",dom,main[2])
 			png(ficpng)
 
 			if (nl == 1) {
 				op = par(c(Gparh,list(cex=.8)))
 				hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
 			} else {
-				op = par(c(Gparm,list(mfcol=c(2,2)),cex=.7))
+				op = par(c(Gparm,list(mfcol=c(2,2)),cex=.75))
 				st = system.time(plotsectiongeo(f,d4,main=desc$longname,palette=desc$palette))
 				if (prof) cat("section time:",st,"\n")
 
 				par(mar=Gparh$mar)
 				hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
-				plotbv(qv[,,i],xy@eta,main=tt[1],xlab="",ylab="",ylim=rev(range(xy@eta)))
+				plotbv(qv[,,i],xy@eta,main=tt,xlab="",ylab="",ylim=rev(range(xy@eta)))
 				abline(v=0,col="darkgrey",lty=2)
 			}
 
@@ -916,7 +921,7 @@ mapex2 = function(u,v,doms,prefix=NULL,main,np=4,palette,force=FALSE,...)
 			} else {
 				ff = sqrt(u^2+v^2)
 				ff = setDataPart(u,ff)
-				par(c(Gparm,list(mfcol=c(2,2),cex=.7)))
+				par(c(Gparm,list(mfcol=c(2,2),cex=.75)))
 				plotsectiongeo(ff,doms[[i]],main=tt[1],palette=desc$palette)
 
 				par(mar=Gparh$mar)
@@ -982,6 +987,8 @@ saveStatraw = function(filename,frlow,params,doms,dates,htime,lstatd,lzmeand)
 
 saveStat = function(filename,framep,paramsp,domsp,datesp,htimep,lstatdp,lzmeanp)
 {
+	if (all(is.na(datesp))) datesp = as.integer(names(datesp))
+
 	if (! file.exists(filename)) {
 		saveStatraw(filename,framep,paramsp,domsp,datesp,htimep,lstatdp,lzmeanp)
 		return()
@@ -1106,38 +1113,46 @@ Gparh = list(mar=c(1.8,1.8,2.5,1),mgp=c(1.5,.5,0),tcl=-.3)
 Gpart = list(mar=c(2.5,2.5,2.5,1),mgp=c(1.5,.5,0),tcl=-.3,cex=.8)
 Gparmt = list(mar=c(2.5,2.5,2.5,4.8),mgp=c(1.5,.5,0),tcl=-.3)
 
-doms = readDom(sprintf("%s/config/domain.txt",Gdiag))
-if (file.exists("config/domain.txt")) doms = readDom("config/domain.txt",doms)
-
-descall = read.table(sprintf("%s/config/params.txt",Gdiag),header=TRUE)
-
 args = strsplit(commandArgs(trailingOnly=TRUE),split="=")
 cargs = lapply(args,function(x) unlist(strsplit(x[-1],split=":")))
 names(cargs) = sapply(args,function(x) x[1])
 
+conf = "config"
+if (! is.null(cargs$conf)) conf = cargs$conf
+cat("--> config:",conf,"\n")
+
+doms = readDom(sprintf("%s/config/domain.txt",Gdiag))
+if (file.exists(sprintf("%s/domain.txt",conf))) {
+	doms = readDom(sprintf("%s/domain.txt",conf),doms)
+}
+cat("--> domains:",names(doms),"\n")
+
+descall = read.table(sprintf("%s/config/params.txt",Gdiag),header=TRUE)
+
 nlatmax = 800
-if (file.exists("config/setting.R")) {
+if (file.exists(sprintf("%s/setting.R",conf))) {
 	cat("--> reading constants:\n")
-	source("config/setting.R",echo=TRUE,spaced=FALSE)
+	source(sprintf("%s/setting.R",conf),echo=TRUE,spaced=FALSE)
 }
 
 if ("fic" %in% names(cargs)) {
 	dff = read.table(cargs$fic,header=TRUE)
 } else {
-	dff <- read.table("config/file.txt",header=TRUE)
+	dff <- read.table(sprintf("%s/file.txt",conf),header=TRUE)
 }
 
 dates = NA
 dd = data.frame(date=dates,graph=TRUE)
 
-if (file.exists("config/date.txt")) {
-	dd = read.table("config/date.txt",skip=1,col.names=c("date","graph"))
-	res = scan("config/date.txt",integer(),n=1,quiet=TRUE,comment.char="#")
+if (file.exists(sprintf("%s/date.txt",conf))) {
+	dd = read.table(sprintf("%s/date.txt",conf),skip=1,col.names=c("date","graph"))
+	res = scan(sprintf("%s/date.txt",conf),integer(),n=1,quiet=TRUE,comment.char="#")
 	dates = dd$date
 }
 
 if (! "params" %in% names(cargs)) {
-	params = scan("config/param.txt",what=character(),quiet=TRUE,comment.char="#")
+	params = scan(sprintf("%s/param.txt",conf),what=character(),quiet=TRUE,
+		comment.char="#")
 } else if (length(cargs$params) == 1 && file.exists(cargs$params)) {
 	params = scan(cargs$params,what=character(),quiet=TRUE,comment.char="#")
 } else {
@@ -1146,7 +1161,7 @@ if (! "params" %in% names(cargs)) {
 cat("--> parameters:",params,"\n")
 
 ind = match(params,descall$faname)
-if (any(is.na(ind))) stop("unknown parameters, see config/params.txt")
+if (any(is.na(ind))) stop("unknown parameters, see params.txt")
 
 desc = descall[ind,]
 npar = dim(desc)[1]
@@ -1154,7 +1169,7 @@ descb = desc
 descb$palette = "Blue-Red+"
 
 ind2 = match(c("ff","gradsp","gradl"),descall$symbol)
-if (any(is.na(ind2))) stop("unknown parameters 2, see config/params.txt")
+if (any(is.na(ind2))) stop("unknown parameters 2, see params.txt")
 desc2 = descall[ind2,]
 desc2b = desc2
 desc2b$palette = "Blue-Red+"
@@ -1166,8 +1181,8 @@ if ("level" %in% names(cargs)) {
 	} else {
 		ilev = as.numeric(cargs$level)
 	}
-} else if (file.exists("config/level.txt")) {
-	ilev = scan("config/level.txt",what=numeric(),quiet=TRUE)
+} else if (file.exists(sprintf("%s/level.txt",conf))) {
+	ilev = scan(sprintf("%s/level.txt",conf),what=numeric(),quiet=TRUE)
 }
 
 Gindl = which(as.integer((10*ilev)%%10) > 0)
@@ -1191,9 +1206,11 @@ if ("etahigh" %in% names(cargs)) etahigh = as.numeric(cargs$etahigh)
 
 pngd = ""
 if ("png" %in% names(cargs)) pngd = as.character(cargs$png)
+if (is.na(pngd)) stop("png cannot be incorrect")
 
-if (! is.na(pngd) && nzchar(pngd) || ! capabilities("X11")) {
-	cat("--> sending plots to PNG files\n")
+if (nzchar(pngd) || ! capabilities("X11")) {
+	if (! nzchar(pngd)) pngd = "diag"
+	cat("--> sending plots to PNG files in",pngd,"\n")
 	if (! file.exists(pngd)) dir.create(pngd,recursive=TRUE)
 } else {
 	png = dev.off = function(...) return(invisible(NULL))
@@ -1227,7 +1244,7 @@ for (id in seq(along=dates)) {
 		cat("\nReading files for base:",dates[id],"\n")
 	}
 
-	if (any(! file.exists(fics))) {
+	if (any(! (file.exists(fics) | regexpr("persist.+\\+[0-9]+",fics) > 0))) {
 		cat("-->",length(which(! file.exists(fics))),"files missing:\n",
 			head(fics[! file.exists(fics)]),"...\n")
 		stop("Error")
@@ -1239,8 +1256,12 @@ for (id in seq(along=dates)) {
 	for (i in seq(along=fics)) {
 		cat("\nFile",fics[i],":\n")
 
-		if (isbin[i]) {
-			con = file(fics[i],"rb")
+		ispersist = regexpr("persist.+\\+[0-9]+",fics[i]) > 0
+		ii = i
+		if (ispersist) ii = 1
+
+		if (isbin[ii]) {
+			con = file(fics[ii],"rb")
 			grid = getGrid(con)
 			eta = getVCoord(con)
 			fc = getTime(con)
@@ -1252,19 +1273,28 @@ for (id in seq(along=dates)) {
 			frame$fc = fc
 			frame$eta = eta
 		} else {
-			frame = getFrame(fics[i])
+			frame = getFrame(fics[ii])
 			ldata = vector("list",length(desc$faname))
 		}
 
 		fc = frame$fc
+
 		base = as.character(fc@base,"%Y%m%d R%H")
-		if (! is.na(dates[id]) && as.character(fc@base,"%Y%m%d") != dates[id]) {
+		if (is.na(dates[id])) {
+			names(dates)[id] = as.character(fc@base,"%Y%m%d")
+		} else if (as.character(fc@base,"%Y%m%d") != dates[id]) {
 			message("dates mismatch: ",fc@base," != ",dates[id])
 			stop("date mismatch")
 		}
 
-		g4 = frame$g4
-		cat("--> grid type:",class(g4),"\n")
+		if (ispersist) {
+			ech = as.integer(gsub(".+\\+0*([0-9]+)\\..+","\\1",fics[i]))
+			stopifnot(! is.na(ech))
+			step = ech*3600
+			cat("--> persistence file, change step to:",step,"\n")
+			fc@step = as.integer(step)
+		}
+
 		hh = formatStep(fc@step,"h")
 		s = sprintf("base/step: %s +%s - file: %s",base,hh,fics[i])
 
@@ -1290,6 +1320,9 @@ for (id in seq(along=dates)) {
 			# weird, but tstep is extended by n files after the 1st day
 			tstep = c(tstep,s)
 		}
+
+		g4 = frame$g4
+		cat("--> grid type:",class(g4),"\n")
 
 		gg = dd$graph[id] && dff$graph[i]
 		prefixp = character()
@@ -1391,7 +1424,8 @@ for (id in seq(along=dates)) {
 			cat(". get fields matching pattern",patt,"\n")
 			stopifnot(is.null(ldata[[j]]))
 			n = length(lc)+1
-			lc[[n]] = mcparallel(getField(fics[i],patt,ss,frame,frlow))
+			lc[[n]] = mcparallel(getField(fics[ii],patt,ss,frame,frlow))
+
 			if (n == 4 || j == npar) {
 				ld = mccollect(lc)
 				try(parallel:::mckill(lc,15),silent=TRUE)
@@ -1779,8 +1813,11 @@ if (any(sapply(lstatd,is.array))) {
 		nerr = rbind(nerr,nerr2[i2,])
 	}
 
-	cat("Save statistics\n")
-	saveStat("diag.RData",frlow,params,names(doms),dates,htime,lstatd,lzmeand)
+	ficstat = "diag.RData"
+	if (nzchar(pngd)) ficstat = sprintf("%s.RData",pngd)
+
+	cat("Save statistics in",ficstat,"\n")
+	saveStat(ficstat,frlow,params,names(doms),dates,htime,lstatd,lzmeand)
 
 	if (mapstat) {
 		cat("Maps and statistics of error (mean bias, RMSE, max and dayx error)\n")
@@ -1809,19 +1846,22 @@ if (any(sapply(lstatd,is.array))) {
 				prefix = character()
 				if (dff$graph[i]) prefix = formatStep(fc@step,"h")
 
-				cat(". bias, RMSE, errmax and index of errmax for",dff$file[i],"\n")
+				cat(". bias for",dff$file[i],"\n")
 				bias = array(lerr[[j]][,,2,i]/nerr[j,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,bias)
 				mapexi(fe,descb[j,],doms,sprintf("bias%s",prefix),main=tt,mnx=FALSE)
 
+				cat(". RMSE for",dff$file[i],"\n")
 				rmse = array(sqrt(lerr[[j]][,,1,i]/nerr[j,i]),dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,rmse)
 				mapexi(fe,desc[j,],doms,sprintf("rmse%s",prefix),main=tt,mnx=FALSE)
 
+				cat(". errmax for",dff$file[i],"\n")
 				errx = array(lerr[[j]][,,3,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,errx)
 				mapexi(fe,desc[j,],doms,sprintf("errx%s",prefix),main=tt,mnx=FALSE)
 
+				cat(". index of errmax for",dff$file[i],"\n")
 				dayx = array(lerr[[j]][,,4,i],dim(lerr[[j]])[1:2])
 				fe = setDataPart(fe,dayx)
 				mapexi(fe,desc[j,],doms,sprintf("dayx%s",prefix),main=tt,mnx=FALSE)

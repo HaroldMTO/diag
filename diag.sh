@@ -48,12 +48,36 @@ addtd()
 
 	for typ in $*
 	do
-		fic=$loc/$typ$suf$base${dom}_$par.png
+		fic=$loc/$typ$base${dom}_$par.png
 		[ -s $fic ] || continue
 
 		printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-		printf "\t<option>%s</option>\n" $fic >> $temph/$typ$suf${dom}_$par.html
+		printf "\t<option>%s</option>\n" $fic >> $temph/$typ${dom}_$par.html
 	done
+
+	cat $diag/stepright.html
+
+	echo "</tr>"
+}
+
+addtdi()
+{
+	local typ fic
+
+	echo "<tr>"
+
+	for typ in $*
+	do
+		# bug on step, use istep
+		fic=$loc/$typ$step${dom}_$par.png
+		[ -s $fic ] || fic=$loc/$typ$istep${dom}_$par.png
+		[ -s $fic ] || continue
+
+		printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
+		printf "\t<option>%s</option>\n" $fic >> $temph/$typ${dom}_$par.html
+	done
+
+	cat $diag/stepright.html
 
 	echo "</tr>"
 }
@@ -141,11 +165,12 @@ type R > /dev/null 2>&1 || module -s load intel R > /dev/null 2>&1
 if [ $graph -eq 1 ]
 then
 	echo "Production of maps and figures for data and errors"
-	R --slave -f $diag/diag.R --args png=$loc ref=$ref mapstat=$mapstat $opt > $loc/diag.log
+	R --slave -f $diag/diag.R --args conf=$conf png=$loc ref=$ref mapstat=$mapstat $opt \
+		> $loc/diag.log
 fi
 
 echo "Production of scores $opt"
-R --slave -f $diag/score.R --args png=$loc $opt
+R --slave -f $diag/score.R --args conf=$conf png=$loc $opt
 
 ficdom=$conf/domain.txt
 if [ ! -s $ficdom ]
@@ -167,6 +192,10 @@ while read -a tt
 do
 	echo ${tt[*]} | grep -q " TRUE" && printf "\t<option>%s</option>\n" "${tt[*]}"
 done < $loc/steps.txt > $temph/steps.html
+
+printf "\t<option>%s</option>\n" $doms > $temph/doms.html
+
+doms=$(echo $doms | cut -d ' ' -f1)
 
 for par in $params
 do
@@ -202,23 +231,15 @@ do
 
 			# rows with name attribute (fig for images, title for row header)
 			echo "<tr><th name='title' $att>Domain $dom - $title</th></tr>"
-
-			for suf in "" ref diff
-			do
-				addtd map hist
-			done
-
-			cat $diag/step.html
+			addtd map hist
+			addtd mapref histref
 
 			[ $mapstat -eq 1 ] || continue
 
 			{
 			echo "<tr><th $att>Min/max of upper and lower levels - Domain $dom</th></tr>"
-
-			for suf in "" ref
-			do
-				addtd mapn mapx
-			done
+			addtd mapn mapx
+			addtd mapnref mapxref
 			} > $temph/mnx.html
 
 			grep -qE '<img .+ src=' $temph/mnx.html && cat $temph/mnx.html
@@ -229,20 +250,7 @@ do
 			for stat in bias rmse errx dayx
 			do
 				echo "<tr><th colspan='2'>Param '$par' $stat - Domain $dom</th></tr>"
-				echo "<tr>"
-
-				for typ in map$stat hist$stat
-				do
-					# bug on step, use istep
-					fic=$loc/$typ$step${dom}_$par.png
-					[ -s $fic ] || fic=$loc/$typ$istep${dom}_$par.png
-					[ -s $fic ] || continue
-
-					printf "\t<td><img name='fig' src='%s' alt='missing image'/></td>\n" $fic
-					printf "\t<option>%s</option>\n" $fic >> $temph/$typ${dom}_$par.html
-				done
-
-				echo "</tr>"
+				addtdi map$stat hist$stat
 			done
 			} > $temph/stat.html
 
@@ -262,7 +270,9 @@ do
 	rm -f $temph/idom.html.save
 	echo ".. HTML select (stat.html)" # with name attributes step and map
 	{
+	sed -re 's:TAG NAME:dom:' -e "/TAG OPT/r $temph/doms.html" $diag/select.html
 	sed -re 's:TAG NAME:step:' -e "/TAG OPT/r $temph/steps.html" $diag/select.html
+
 	for dom in $doms
 	do
 		# same order as table images

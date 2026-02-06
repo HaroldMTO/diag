@@ -45,26 +45,28 @@ rms = function(x,...)
 	sqrt(mean(x^2,...))
 }
 
-rmx = function(x,...)
+rmx = function(x,wide=FALSE,extra=FALSE,...)
 {
 	m = mean(x,...)
 	x2 = x-m
+	if (! wide) return(c(rms=rms(x,...),ave=m))
+
+	if (! extra) return(c(rms=rms(x,...),ave=m,q90=quantile(abs(x),prob=.9,...)))
+
 	a = max(abs(x2))/2
 	x2[abs(x2) < a] = 0
 	x2 = x2+m
 	c(rms=rms(x,...),ave=m,q90=quantile(abs(x),prob=.9,...),rms2=rms(x2,...))
 }
 
-matplott = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",
-	legend=c("RMS","bias","Q9","X2"),...)
+matplott = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",legend=NULL,...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(h=0,col="darkgrey")
 	if (! is.null(legend)) legend(x.leg,legend,col=col,lty=lty,pch=pch,bg="transparent")
 }
 
-matplotv = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",
-	legend=c("RMS","bias","Q9","X2"),...)
+matplotv = function(x,y,col=1,pch="+",lty=1:4,x.leg="topleft",legend=NULL,...)
 {
 	matplot(x,y,type="o",lty=lty,col=col,pch=pch,...)
 	abline(v=0,col="darkgrey")
@@ -86,12 +88,19 @@ loadStat = function(filename,framep,paramsp,domsp,datesp,htimep)
 	if (class(frlow$g4) != class(framep$g4)) {
 		cat("--> different classes:",class(frlow$g4),class(framep$g4),"\n")
 		return(NULL)
-	} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
-		cat("--> different grid\n")
-		return(NULL)
+	#} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
+	#	cat("--> different grid\n")
+	#	return(NULL)
 	} else if (frlow$nlevel != framep$nlevel || ! identical(frlow$ilev,framep$ilev)) {
 		cat("--> different levels:",frlow$nlevel,framep$nlevel,"\n")
 		return(NULL)
+	}
+
+	if (all(is.na(dates))) {
+		ind = grep("(.+?/)?\\d{2}/\\d{8}/.+",filename)
+		if (length(ind) == length(dates)) {
+			dates = as.integer(sub("(.+?/)?\\d{2}/(\\d{8})/.+","\\2",filename))
+		}
 	}
 
 	indp = match(paramsp,params)
@@ -129,12 +138,19 @@ loadZmean = function(filename,framep,paramsp,datesp,htimep)
 	if (class(frlow$g4) != class(framep$g4)) {
 		cat("--> different classes:",class(frlow$g4),class(framep$g4),"\n")
 		return(NULL)
-	} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
-		cat("--> different grid\n")
-		return(NULL)
+	#} else if (! identical(frlow$g4@nlong,framep$g4@nlong)) {
+	#	cat("--> different grid\n")
+	#	return(NULL)
 	} else if (frlow$nlevel != framep$nlevel || ! identical(frlow$ilev,framep$ilev)) {
 		cat("--> different levels:",frlow$nlevel,framep$nlevel,"\n")
 		return(NULL)
+	}
+
+	if (all(is.na(dates))) {
+		ind = grep("(.+?/)?\\d{2}/\\d{8}/.+",filename)
+		if (length(ind) == length(dates)) {
+			dates = as.integer(sub("(.+?/)?\\d{2}/(\\d{8})/.+","\\2",filename))
+		}
 	}
 
 	indp = match(paramsp,params)
@@ -163,17 +179,25 @@ source(sprintf("%s/plot.R",Gdiag))
 Gpart = list(mar=c(2.5,2.5,2.5,1),mgp=c(1.5,.5,0),tcl=-.3,cex=.8)
 Gparmt = list(mar=c(2.5,2.5,2.5,4.8),mgp=c(1.5,.5,0),tcl=-.3)
 
-doms = readDom(sprintf("%s/config/domain.txt",Gdiag))
-if (file.exists("config/domain.txt")) doms = readDom("config/domain.txt",doms)
-
-descall = read.table(sprintf("%s/config/params.txt",Gdiag),header=TRUE)
-
 args = strsplit(commandArgs(trailingOnly=TRUE),split="=")
 cargs = lapply(args,function(x) unlist(strsplit(x[-1],split=":")))
 names(cargs) = sapply(args,function(x) x[1])
 
-pngd = "."
+conf = "config"
+if (! is.null(cargs$conf)) conf = cargs$conf
+cat("--> config:",conf,"\n")
+
+doms = readDom(sprintf("%s/config/domain.txt",Gdiag))
+if (file.exists(sprintf("%s/domain.txt",conf))) {
+	doms = readDom(sprintf("%s/domain.txt",conf),doms)
+}
+
+descall = read.table(sprintf("%s/config/params.txt",Gdiag),header=TRUE)
+
+pngd = "diag"
 if ("png" %in% names(cargs)) pngd = cargs$png
+if (is.na(pngd)) stop("png is incorrect")
+
 if (! "cmp" %in% names(cargs)) cargs$cmp = character()
 
 if ("png" %in% names(cargs) || ! capabilities("X11")) {
@@ -195,9 +219,15 @@ if (any(duplicated(basename(cargs$cmp)))) stop("duplicated directory names")
 
 lstatr = lzmeanr = list()
 
-for (cmp in c(".",cargs$cmp)) {
+for (cmp in c(pngd,cargs$cmp)) {
 	stopifnot(file.exists(cmp) && file.info(cmp)$isdir)
-	ficsave = sprintf("%s/diag.RData",cmp)
+	ficsave = sprintf("%s.RData",cmp)
+	if (! file.exists(ficsave)) ficsave = sprintf("%s/diag.RData",cmp)
+	if (! file.exists(ficsave)) {
+		cat("--> no stat file, pass\n")
+		next
+	}
+
 	cat("Load cmp file",ficsave,"\n")
 
 	n = length(lstatr)+1
@@ -357,9 +387,11 @@ for (j in seq(along=lstatd)) {
 						}
 						plotbv(qet,etai[indl],main=tth,xlab=ss,ylab="eta",
 							ylim=c(etahigh,yeta[2]))
+						it0 = min(it+1,max(indt))
 					}
 				}
 
+				it0 = 1
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time [%g,%g]%s",doms[id],
 						ht[it0],ht[it],tunit)
@@ -374,13 +406,22 @@ for (j in seq(along=lstatd)) {
 		}
 	}
 
+	legend = c("RMS","bias")
+	if (length(lstatr) == 1) {
+		#legend = c("RMS","bias","Q9","X2")
+		legend = c("RMS","bias","Q9")
+	}
+
 	cols = c("black","royalblue1","orangered3","forestgreen","mediumpurple3")
-	cols = rep(cols[seq(along=lstatr)],each=3)
+	cols = rep(cols[seq(along=lstatr)],each=length(legend))
+	lty = seq(along=legend)
+	w = length(legend) > 2
+
 	cat("--> colors:",unique(cols),"\n")
 
 	cat("Scores by lead-time, levels in rows\n")
 	# cmp[stat, level, domain, dates, step] -> rmx, level, domain, step, cmp
-	rmxv = sapply(lstatr,function(statd) apply(statd[[j]],c(2,3,5),rmx,na.rm=TRUE),
+	rmxv = sapply(lstatr,function(statd) apply(statd[[j]],c(2,3,5),rmx,wide=w,na.rm=TRUE),
 		simplify="array")
 	# rmx, level, domain, step, cmp -> level, domain, step, rmx, cmp
 	rmxv = aperm(rmxv,c(2:4,1,5))
@@ -401,7 +442,8 @@ for (j in seq(along=lstatd)) {
 			for (il in indl) {
 				if (nl > 1) tt[2] = sprintf("domain %s, level %d",doms[id],ilev[il])
 				rmxvt = matrix(rmxv[il,id,,,],nrow=nt)
-				matplott(ht,rmxvt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
+				matplott(ht,rmxvt,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
+					xaxt="n")
 				axis(1,ht6)
 			}
 		}
@@ -411,7 +453,7 @@ for (j in seq(along=lstatd)) {
 
 	if (nl > 1) {
 		tt = sprintf("Score vert. mean of %s",nom)
-		rmxm = sapply(lstatr,function(statd) apply(statd[[j]],c(3,5),rmx,na.rm=TRUE),
+		rmxm = sapply(lstatr,function(statd) apply(statd[[j]],c(3,5),rmx,wide=w,na.rm=TRUE),
 			simplify="array")
 		# rmx, domain, step, cmp -> domain, step, rmx, cmp
 		rmxm = aperm(rmxm,c(2:3,1,4))
@@ -428,7 +470,8 @@ for (j in seq(along=lstatd)) {
 			for (id in 1:min(ndom-nj*i,nj)+nj*i) {
 				tt[2] = sprintf("domain %s",doms[id])
 				rmxt = matrix(rmxm[id,,,],nrow=nt)
-				matplott(ht,rmxt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
+				matplott(ht,rmxt,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
+               xaxt="n")
 				axis(1,ht6)
 			}
 
@@ -440,6 +483,7 @@ for (j in seq(along=lstatd)) {
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
 		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
 		nc = length(indt)
+		nj = 1
 		if (etahigh > 0) {
 			indl = which(etai < etahigh)
 			if (length(indl) < 3) indl = which(etai < .5)
@@ -451,6 +495,7 @@ for (j in seq(along=lstatd)) {
 			nr = 1
 		} else {
 			nr = min(2,ndom)
+			nj = nr
 		}
 
 		# rmxv scorev: v plot 2x3t
@@ -464,7 +509,7 @@ for (j in seq(along=lstatd)) {
 						tth[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 						rmxvl = matrix(rmxv[indl,id,it,,],nrow=length(indl))
 						matplotv(rmxvl,etai[indl],x.leg="topright",xlab=ss,ylab="eta",main=tth,
-							ylim=c(etahigh,yeta[2]))
+							ylim=c(etahigh,yeta[2]),col=cols,lty=lty,legend=legend)
 					}
 				}
 
@@ -472,7 +517,7 @@ for (j in seq(along=lstatd)) {
 					tt[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 					rmxvl = matrix(rmxv[,id,it,,],nrow=nl)
 					matplotv(rmxvl,etai,x.leg="topright",xlab=ss,ylab="eta",main=tt,ylim=yeta,
-						col=cols)
+						col=cols,lty=lty,legend=legend)
 				}
 			}
 
@@ -485,8 +530,8 @@ for (j in seq(along=lstatd)) {
 		# cmp[lat, level, dates, step] -> rmx, level, step, cmp
 		# dims are [lat,lev,date,time]
 		# rmxv score: ll plot 6l
-		zrmxv = sapply(lzmeanr,function(zmean) apply(zmean[[j]],c(2,4),rmx,na.rm=TRUE),
-			simplify="array")
+		zrmxv = sapply(lzmeanr,function(zmean) apply(zmean[[j]],c(2,4),rmx,wide=w,
+			na.rm=TRUE),simplify="array")
 		zrmxv = aperm(zrmxv,c(2:3,1,4))
 
 		tt = sprintf("Zonal score of %s",nom)
@@ -501,7 +546,7 @@ for (j in seq(along=lstatd)) {
 		for (il in indl) {
 			if (nl > 1) tt[2] = sprintf("level %d",frlow$ilev[il])
 			zt = matrix(zrmxv[il,,,],nrow=length(ht))
-			matplott(ht,zt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
+			matplott(ht,zt,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n",lty=lty,legend=legend)
 			axis(1,ht6)
 		}
 
@@ -510,14 +555,15 @@ for (j in seq(along=lstatd)) {
 		if (nl > 1) {
 			cat("Scores of zonal mean - maps\n")
 			tt = sprintf("Score zon.+vert. mean, %s",nom)
-			zrmx = sapply(lzmeanr,function(zmean) t(apply(zmean[[j]],4,rmx,na.rm=TRUE)),
+			zrmx = sapply(lzmeanr,function(zmean) t(apply(zmean[[j]],4,rmx,wide=w,na.rm=TRUE)),
 				simplify="array")
 			zrmx = matrix(zrmx,nrow=length(ht))
 
 			png(sprintf("%s/scorez2_%s.png",pngd,ss))
 			par(Gpart)
 
-			matplott(ht,zrmx,xlab=tlab,ylab=ss,main=tt,col=cols,xaxt="n")
+			matplott(ht,zrmx,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
+				xaxt="n")
 			axis(1,ht6)
 
 			dev.off()
@@ -536,7 +582,7 @@ for (j in seq(along=lstatd)) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
 				zv = matrix(zrmxv[,it,,],nrow=nl)
 				matplotv(zv,etai,x.leg="topright",ylim=yeta,xlab=ss,ylab="eta",main=tt,
-					col=cols)
+					col=cols,lty=lty,legend=legend)
 			}
 
 			dev.off()
@@ -555,15 +601,16 @@ for (j in seq(along=lstatd)) {
 		par(c(Gparmt,list(mfrow=c(nr,nc))))
 
 		if (nl == 1) {
-			#zrmx = sapply(lzmeand,function(zmean) t(apply(zmean[[j]],c(1,4),rmx,na.rm=TRUE)),
-			#	simplify="array")
+			#zrmx = sapply(lzmeand,function(zmean) t(apply(zmean[[j]],c(1,4),rmx,wide=w,
+			#	na.rm=TRUE)),simplify="array")
 			#zrmx = aperm(zrmx,c(2:3,1,4))
 			zrmx = apply(lzmeand[[j]],c(1,4),mean,na.rm=TRUE)
 
 			for (it in indt) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
 				zz = matrix(zrmx[,it],nrow=length(lat))
-				matplott(lat,zz,main=tt,xlab="Latitude",ylab="Bias",col=cols,xaxt="n")
+				matplott(lat,zz,main=tt,xlab="Latitude",ylab="Bias",col=cols,lty=lty,
+					legend=legend,xaxt="n")
 				axis(1,latx)
 			}
 		} else {
@@ -608,7 +655,7 @@ for (j in seq(along=lstatd)) {
 	nc = min(2,ndom)
 
 	# cmp[stat, level, domain, dates, step] -> rmx, domain, dates, step, cmp
-	rmxt = sapply(lstatr,function(statd) apply(statd[[j]],3:5,rmx,na.rm=TRUE),
+	rmxt = sapply(lstatr,function(statd) apply(statd[[j]],3:5,rmx,wide=w,na.rm=TRUE),
 		simplify="array")
 	# rmx, domain, dates, step, cmp -> domain, dates, step, rmx, cmp
 	rmxt = aperm(rmxt,c(2:4,1,5))
@@ -622,7 +669,8 @@ for (j in seq(along=lstatd)) {
 			for (it in indt) {
 				tt[2] = sprintf("domain %s, lead-time %g%s",doms[id],ht[it],tunit)
 				rmxtd = matrix(rmxt[id,indd,it,,],nrow=length(indd))
-				matplott(dd[indd],rmxtd,main=tt,xlab="Date",ylab=ss,col=cols,xaxt="n",las=3)
+				matplott(dd[indd],rmxtd,main=tt,xlab="Date",ylab=ss,col=cols,lty=lty,
+					legend=legend,xaxt="n",las=3)
 				axis.Date(1,dd,format="%Y%m%d")
 			}
 		}
