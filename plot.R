@@ -1,3 +1,24 @@
+skeweta = function(eta,limit=.1)
+{
+	ind = which(eta < limit)
+	if (length(ind) > 0) eta[ind] = seq(min(eta),max(eta[ind]),length.out=length(ind))
+	eta
+}
+
+scale10 = function(x,scientific=TRUE)
+{
+	xmax = max(abs(x),na.rm=TRUE)
+	if (length(xmax) == 0 || xmax == 0) return(1)
+
+	xlog = log10(xmax/5)
+
+	if (scientific) {
+		10^(xlog%/%3*3)
+	} else {
+		10^round(xlog-.5)
+	}
+}
+
 plotb = function(x,y,range=3,lty=1,col="bisque",pch="+",ylim=NULL,...)
 {
 	if (is.null(ylim)) ylim = range(boxplot(y,plot=FALSE)$stats)
@@ -41,3 +62,21 @@ plotv = function(x,y,z,breaks,ylim=rev(range(y,finite=TRUE)),xaxs="i",yaxs="i",
 	maplegend(lev,col=cols)
 }
 
+elems = function(n=1,np=1,nrow=1,ncol=1)
+{
+	# n elements to plot in np figures each on an [nrow,ncol] layout
+	stopifnot(length(n) == 1)
+	stopifnot(n > 0)
+	stopifnot(length(ncol) == 1 && length(nrow) == 1)
+	stopifnot(nrow > 0 && ncol > 0)
+
+	# nelem: nb of elements per page
+	nelem = nrow*ncol/np
+	stopifnot(nelem == (nrow*ncol)%/%np)
+
+	ni = (n-1)%/%nelem+1
+	e = list()
+	for (i in seq(ni)) e[[i]] = 1:min(n-nelem*(i-1),nelem)+nelem*(i-1)
+
+	e
+}

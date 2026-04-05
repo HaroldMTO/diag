@@ -219,12 +219,13 @@ if (any(duplicated(basename(cargs$cmp)))) stop("duplicated directory names")
 
 lstatr = lzmeanr = list()
 
+cat("Read reference statistics\n")
 for (cmp in c(pngd,cargs$cmp)) {
 	stopifnot(file.exists(cmp) && file.info(cmp)$isdir)
 	ficsave = sprintf("%s.RData",cmp)
 	if (! file.exists(ficsave)) ficsave = sprintf("%s/diag.RData",cmp)
 	if (! file.exists(ficsave)) {
-		cat("--> no stat file, pass\n")
+		cat("--> no stat file for",cmp,", pass\n")
 		next
 	}
 
@@ -271,7 +272,8 @@ for (cmp in c(pngd,cargs$cmp)) {
 	names(lzmeanr)[n] = basename(cmp)
 }
 
-#if (length(lstatr) < 2) stop("no stat to compare")
+if (length(lstatr) == 0)  stop("no stat to compare")
+
 if (any(sapply(lzmeanr,is.null))) lzmeanr = NULL
 lstatd = lstatr[[1]]
 lzmeand = lzmeanr[[1]]
@@ -329,11 +331,14 @@ for (j in seq(along=lstatd)) {
 	indl = round(seq(0,nl,length.out=nr+1)[-1])
 
 	# qe err: ll box 3lx2
-	for (i in seq((ndom-1)%/%nc+1)-1) {
+	l3d2 = elems(ndom,nr,nr,nc)
+	#for (i in seq((ndom-1)%/%nc+1)-1) {
+		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+	for (i in seq(along=l3d2)) {
 		png(sprintf("%s/err%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 
-		for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+		for (id in l3d2[[i]]) {
 			il0 = 1
 			tt[2] = sprintf("domain %s",doms[id])
 			for (il in indl) {
@@ -371,13 +376,17 @@ for (j in seq(along=lstatd)) {
 		}
 
 		# qe errv: box v 2x3t
-		for (i in seq((ndom-1)%/%nj+1)-1) {
+		d2t3 = elems(ndom,nr*nc/nj,nr,nc)
+		#for (i in seq((ndom-1)%/%nj+1)-1) {
+			#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+		for (i in seq(along=d2t3)) {
 			png(sprintf("%s/errv%d_%s.png",pngd,i,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
 
-			for (id in 1:min(ndom-nj*i,nj)+nj*i) {
-				it0 = 1
+			for (id in d2t3[[i]]) {
 				if (etahigh > 0) {
+					it0 = 1
+					etas = skeweta(etai[indl],min(etahigh,.1))
 					for (it in indt) {
 						tth[2] = sprintf("dom. %s, lead-time [%g,%g]%s",doms[id],
 							ht[it0],ht[it],tunit)
@@ -385,19 +394,19 @@ for (j in seq(along=lstatd)) {
 						if (length(dim(qet)) == 3) {
 							qet = matrix(aperm(qet,c(3,1:2)),ncol=length(indl))
 						}
-						plotbv(qet,etai[indl],main=tth,xlab=ss,ylab="eta",
-							ylim=c(etahigh,yeta[2]))
+						plotbv(qet,etas,main=tth,xlab=ss,ylab="eta",ylim=c(etahigh,yeta[2]))
 						it0 = min(it+1,max(indt))
 					}
 				}
 
 				it0 = 1
+				etas = skeweta(etai)
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time [%g,%g]%s",doms[id],
 						ht[it0],ht[it],tunit)
 					qet = qe[,,id,it0:it]
 					if (length(dim(qet)) == 3) qet = matrix(aperm(qet,c(3,1:2)),ncol=nl)
-					plotbv(qet,etai,main=tt,xlab=ss,ylab="eta",ylim=yeta)
+					plotbv(qet,etas,main=tt,xlab=ss,ylab="eta",ylim=yeta)
 					it0 = min(it+1,max(indt))
 				}
 			}
@@ -433,11 +442,14 @@ for (j in seq(along=lstatd)) {
 	indl = as.integer(seq(1,nl,length.out=nr))
 
 	# rmxv score: ll plot 3lx2
-	for (i in seq((ndom-1)%/%nc+1)-1) {
+	l3d2 = elems(ndom,nr,nr,nc)
+	#for (i in seq((ndom-1)%/%nc+1)-1) {
+		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+	for (i in seq(along=l3d2)) {
 		png(sprintf("%s/score%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 
-		for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+		for (id in l3d2[[i]]) {
 			tt[2] = sprintf("domain %s",doms[id])
 			for (il in indl) {
 				if (nl > 1) tt[2] = sprintf("domain %s, level %d",doms[id],ilev[il])
@@ -462,12 +474,15 @@ for (j in seq(along=lstatd)) {
 		off = (ndom-1)%/%nc+1
 		nr = min(2,ndom)
 		nc = min(2,1+(ndom-1)%/%2)
+		d2d2 = elems(ndom,1,nr,nc)
 		nj = nr*nc
-		for (i in seq((ndom-1)%/%nj+1)-1) {
+		#for (i in seq((ndom-1)%/%nj+1)-1) {
+			#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+		for (i in seq(along=d2d2)) {
 			png(sprintf("%s/score%d_%s.png",pngd,off+i,ss))
 			par(c(Gpart,list(mfcol=c(nr,nc))))
 
-			for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+			for (id in d2d2[[i]]) {
 				tt[2] = sprintf("domain %s",doms[id])
 				rmxt = matrix(rmxm[id,,,],nrow=nt)
 				matplott(ht,rmxt,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
@@ -483,40 +498,47 @@ for (j in seq(along=lstatd)) {
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
 		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
 		nc = length(indt)
-		nj = 1
+		nj = min(2,ndom)
 		if (etahigh > 0) {
 			indl = which(etai < etahigh)
 			if (length(indl) < 3) indl = which(etai < .5)
 			if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
 			nr = 2
+			nj = 1
 			tth = tt
 			tth[1] = sprintf("..., high levels",nom)
 		} else if (wide) {
 			nr = 1
+			nj = 1
 		} else {
 			nr = min(2,ndom)
-			nj = nr
 		}
 
 		# rmxv scorev: v plot 2x3t
-		for (i in seq((ndom-1)%/%nr+1)-1) {
+		d2t3 = elems(ndom,nr*nc/nj,nr,nc)
+		#for (i in seq((ndom-1)%/%nj+1)-1) {
+			#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+		for (i in seq(along=d2t3)) {
 			png(sprintf("%s/scorev%d_%s.png",pngd,i,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
 
-			for (id in 1:min(ndom-nr*i,nr)+nr*i) {
+			for (id in d2t3[[i]]) {
+				tt[2] = sprintf("domain %s",doms[id])
 				if (etahigh > 0) {
+					etas = skeweta(etai[indl],min(etahigh,.1))
 					for (it in indt) {
 						tth[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 						rmxvl = matrix(rmxv[indl,id,it,,],nrow=length(indl))
-						matplotv(rmxvl,etai[indl],x.leg="topright",xlab=ss,ylab="eta",main=tth,
+						matplotv(rmxvl,etas,x.leg="topright",xlab=ss,ylab="eta",main=tth,
 							ylim=c(etahigh,yeta[2]),col=cols,lty=lty,legend=legend)
 					}
 				}
 
+				etas = skeweta(etai)
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 					rmxvl = matrix(rmxv[,id,it,,],nrow=nl)
-					matplotv(rmxvl,etai,x.leg="topright",xlab=ss,ylab="eta",main=tt,ylim=yeta,
+					matplotv(rmxvl,etas,x.leg="topright",xlab=ss,ylab="eta",main=tt,ylim=yeta,
 						col=cols,lty=lty,legend=legend)
 				}
 			}
@@ -578,10 +600,11 @@ for (j in seq(along=lstatd)) {
 			png(sprintf("%s/scorevz1_%s.png",pngd,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
 
+			etas = skeweta(etai)
 			for (it in indt) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
 				zv = matrix(zrmxv[,it,,],nrow=nl)
-				matplotv(zv,etai,x.leg="topright",ylim=yeta,xlab=ss,ylab="eta",main=tt,
+				matplotv(zv,etas,x.leg="topright",ylim=yeta,xlab=ss,ylab="eta",main=tt,
 					col=cols,lty=lty,legend=legend)
 			}
 
@@ -616,9 +639,10 @@ for (j in seq(along=lstatd)) {
 		} else {
 			zbiasv = apply(lzmeand[[j]],c(1:2,4),mean,na.rm=TRUE)
 
+			etas = skeweta(etai)
 			for (it in indt) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
-				plotv(lat,etai,zbiasv[,,it],main=tt,ylim=yeta,xlab="Latitude",ylab="eta",
+				plotv(lat,etas,zbiasv[,,it],main=tt,ylim=yeta,xlab="Latitude",ylab="eta",
 					palette="BlueRed+",xaxt="n")
 				axis(1,latx)
 			}
@@ -633,9 +657,10 @@ for (j in seq(along=lstatd)) {
 			png(sprintf("%s/scorevz3_%s.png",pngd,ss))
 			par(c(Gparmt,list(mfrow=c(nr,nc))))
 
+			etas = skeweta(etai)
 			for (it in indt) {
 				tt[2] = sprintf("lead-time %g%s",ht[it],tunit)
-				plotv(lat,etai,zrmsev[,,it],main=tt,ylim=yeta,xlab="Latitude",ylab="eta",
+				plotv(lat,etas,zrmsev[,,it],main=tt,ylim=yeta,xlab="Latitude",ylab="eta",
 					xaxt="n")
 				axis(1,latx)
 			}
@@ -661,11 +686,14 @@ for (j in seq(along=lstatd)) {
 	rmxt = aperm(rmxt,c(2:4,1,5))
 
 	# rmxt scoret: day t plot 3tx2
-	for (i in seq((ndom-1)%/%nc+1)-1) {
+	t3d2 = elems(ndom,nr,nr,nc)
+	for (i in seq(along=t3d2)) {
+	#for (i in seq((ndom-1)%/%nc+1)-1) {
+		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
 		png(sprintf("%s/scoret%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 
-		for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+		for (id in d2t3[[i]]) {
 			for (it in indt) {
 				tt[2] = sprintf("domain %s, lead-time %g%s",doms[id],ht[it],tunit)
 				rmxtd = matrix(rmxt[id,indd,it,,],nrow=length(indd))
@@ -684,6 +712,7 @@ for (j in seq(along=lstatd)) {
 		tt = sprintf("RMSE of %s",nom)
 		rmxvd = apply(lstatd[[j]],2:5,rms,na.rm=TRUE)
 
+		etas = skeweta(etai)
 		for (i in seq((ndom-1)%/%nc+1)-1) {
 			png(sprintf("%s/rmsevt%d_%s.png",pngd,i,ss))
 			par(c(Gparmt,list(mfcol=c(nr,nc))))
@@ -693,7 +722,7 @@ for (j in seq(along=lstatd)) {
 
 				for (it in indt) {
 					tt[2] = sprintf("domain %s, lead-time %g%s",doms[id],ht[it],tunit)
-					plotv(dd[indd],etai,t(rmxvd[,id,indd,it]),br,main=tt,ylim=yeta,
+					plotv(dd[indd],etas,t(rmxvd[,id,indd,it]),br,main=tt,ylim=yeta,
 						xlab="Date",ylab="eta",xaxt="n",las=3)
 					axis.Date(1,dd,format="%Y%m%d")
 				}

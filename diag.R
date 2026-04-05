@@ -300,7 +300,9 @@ getField = function(fic,param,symbol,frame,frlow=frame,cache.alt=FALSE,mc.cores=
 
 	fc = frame$fc
 	fsave = sprintf("%s/e%s/%s.RData",dirname(fic),formatStep(fc@step),symbol)
-	if (cache.alt) fsave = sub("\\.RData",".2.RData",fsave)
+	if (cache.alt && file.exists(fsave) && file.info(fsave)$mtime < file.info(fic)$mtime) {
+		fsave = sub("\\.RData",".2.RData",fsave)
+	}
 
 	if (file.exists(fsave) && file.info(fsave)$mtime < file.info(fic)$mtime) {
 		cat("--> cache file older than data file, removed\n")
@@ -689,19 +691,20 @@ plotsectiongeo = function(field,dom,main,...)
 {
 	longm = round(mean(dom@xlim),1)
 	latm = round(mean(dom@ylim),1)
+	etas = skeweta(field@eta)
 
 	yz = sectiongeo(field,longm,dom@ylim)
 	stopifnot(all(is.finite(yz$data)))
 
 	main[2] = sprintf("S->N section, longitude %g",longm)
-	plotv(yz$lats,field@eta,yz$data,main=main,xlab="",ylab="",...)
+	plotv(yz$lats,etas,yz$data,main=main,xlab="",ylab="",...)
 	stopifnot(all(abs(range(yz$lats)) <= 90))
 
 	xz = sectiongeo(field,dom@xlim,latm)
 	stopifnot(all(is.finite(xz$data)))
 
 	main[2] = sprintf("W->E section, latitude %g",latm)
-	plotv(xz$longs,field@eta,xz$data,main=main,xlab="",ylab="",long=TRUE,...)
+	plotv(xz$longs,etas,xz$data,main=main,xlab="",ylab="",long=TRUE,...)
 	if (any(abs(range(xz$longs)) > 180)) cat("--> longs:",rangeLong(xz$longs),"\n")
 }
 
@@ -837,7 +840,8 @@ mapexi = function(f,desc,doms,prefix=character(),prob=seq(0,100)/100,main,np=4,
 
 				par(mar=Gparh$mar)
 				hist.annot(xy,col="whitesmoke",main=tt,xlab=NULL,ylab=NULL)
-				plotbv(qv[,,i],xy@eta,main=tt,xlab="",ylab="",ylim=rev(range(xy@eta)))
+				etas = skeweta(xy@eta)
+				plotbv(qv[,,i],etas,main=tt,xlab="",ylab="",ylim=rev(range(xy@eta)))
 				abline(v=0,col="darkgrey",lty=2)
 			}
 
@@ -926,7 +930,8 @@ mapex2 = function(u,v,doms,prefix=NULL,main,np=4,palette,force=FALSE,...)
 
 				par(mar=Gparh$mar)
 				hist.annot(ffdom,col="whitesmoke",main=tt[1],xlab=NULL,ylab=NULL)
-				plotbv(qv[,,i],u@eta,main=tt[1],xlab="",ylab="",ylim=rev(range(u@eta)))
+				etas = skeweta(u@eta)
+				plotbv(qv[,,i],etas,main=tt[1],xlab="",ylab="",ylim=rev(range(u@eta)))
 				abline(v=0,col="darkgrey",lty=2)
 			}
 
@@ -1217,8 +1222,9 @@ if (nzchar(pngd) || ! capabilities("X11")) {
 	if (interactive()) options(device.ask.default=TRUE)
 }
 
-ff = list(vars=c("X","Y"),formula=function(x,y) sqrt(x^2+y^2),symbol="ff")
-gsp = list(vars=c("L","M"),formula=function(x,y) sqrt(x^2+y^2),symbol="gradsp")
+# names of variables must correspond to saved variables (ie names in lsave)
+ff = list(vars=c("X","Y"),formula=function(X,Y) sqrt(X^2+Y^2),symbol="ff")
+gsp = list(vars=c("L","M"),formula=function(L,M) sqrt(L^2+M^2),symbol="gradsp")
 #gl = list(vars="GPL",formula=gradl,symbol="gradl")
 compound = list("wind speed"=ff,"gradient module"=gsp)
 
@@ -1414,17 +1420,17 @@ for (id in seq(along=dates)) {
 		lc = list()
 		selev = length(frlow$ilev) < length(frlow$eta)
 		for (j in seq(npar)) {
-			if (isbin[i] || regexpr("^\\.",desc$faname[j]) > 0) next
+			if (! isbin[i] && regexpr("^\\.",desc$faname[j]) < 0) {
+				patt = FApattern(desc$ltype[j],desc$faname[j],frlow$ilev,selev)
+				if (is.null(patt)) next
 
-			patt = FApattern(desc$ltype[j],desc$faname[j],frlow$ilev,selev)
-			if (is.null(patt)) next
+				ss = desc$symbol[j]
 
-			ss = desc$symbol[j]
-
-			cat(". get fields matching pattern",patt,"\n")
-			stopifnot(is.null(ldata[[j]]))
-			n = length(lc)+1
-			lc[[n]] = mcparallel(getField(fics[ii],patt,ss,frame,frlow))
+				cat(". get fields matching pattern",patt,"\n")
+				stopifnot(is.null(ldata[[j]]))
+				n = length(lc)+1
+				lc[[n]] = mcparallel(getField(fics[ii],patt,ss,frame,frlow))
+			}
 
 			if (n == 4 || j == npar) {
 				ld = mccollect(lc)
@@ -1442,17 +1448,18 @@ for (id in seq(along=dates)) {
 			lc = list()
 			selev = length(framo$ilev) < length(framo$eta)
 			for (j in seq(npar)) {
-				if (isbin[i] || regexpr("^\\.",desc$faname[j]) > 0) next
+				if (! isbin[i] && regexpr("^\\.",desc$faname[j]) < 0) {
+					ss = desc$symbol[j]
+					patto = FApattern(desc$ltype[j],desc$faname[j],framo$ilev,selev)
+					#if (patto != patt) cat("--> new pattern for ref:",patto,"\n")
 
-				ss = desc$symbol[j]
-				patto = FApattern(desc$ltype[j],desc$faname[j],framo$ilev,selev)
-				#if (patto != patt) cat("--> new pattern for ref:",patto,"\n")
+					cat(". get ref fields matching pattern",patto,"\n")
+					if (length(ldatao) >= j) stopifnot(is.null(ldatao[[j]]))
+					n = length(lc)+1
+					lc[[n]] = mcparallel(getField(ficref,patto,ss,framo,frlow,cache.alt=TRUE,
+						mc.cores=8))
+				}
 
-				cat(". get ref fields matching pattern",patto,"\n")
-				if (length(ldatao) >= j) stopifnot(is.null(ldatao[[j]]))
-				n = length(lc)+1
-				lc[[n]] = mcparallel(getField(ficref,patto,ss,framo,frlow,cache.alt=TRUE,
-					mc.cores=8))
 				if (n == 4 || j == npar) {
 					ld = mccollect(lc)
 					try(parallel:::mckill(lc,15),silent=TRUE)
@@ -1618,7 +1625,11 @@ for (id in seq(along=dates)) {
 			if (! all(cp$vars %in% names(lsave))) next
 
 			cat(". compound field:",names(compound)[k],"\n")
-			fcomp = setDataPart(f,cp$formula(lsave[cp$vars]))
+			lvar = lapply(lsave[cp$vars],getDataPart)
+			# names must match (if not, problem in internal function do.call)
+			stopifnot(all(names(formals(cp$formula)) == cp$vars))
+			fcomp = do.call(cp$formula,lvar)
+			fcomp = setDataPart(f,fcomp)
 
 			j2 = match(cp$symbol,desc2$symbol)
 			tt = desc2$longname[j2]
@@ -1626,29 +1637,31 @@ for (id in seq(along=dates)) {
 			qv = mapexi(fcomp,desc2[j2,],doms,prefixp,main=tt)
 			if (length(lstat2) < j2 || is.null(lstat2[[j2]])) {
 				lstat2[[j2]] = statarray(qv,dates,dff$file)
-				lerr[[j]] = statarray(fd,c("rmse","bias","errx","dayx"),dff$file)
 			}
 
 			lstat2[[j2]][,,,id,i] = qv
 
 			if (! all(cp$vars %in% names(lsaveo))) next
 
-			fcompo = setDataPart(f,cp$formula(lsaveo[cp$vars]))
+			fcompo = do.call(cp$formula,lsaveo[cp$vars])
+			fcompo = setDataPart(f,fcompo)
 
-			fd = setDataPart(fcomp,fcomp-fcompo)
+			fcompd = setDataPart(fcomp,fcomp-fcompo)
 
 			tto[1] = tt[1]
 			tt[1] = sprintf("Diff of %s",tt[1])
 			mapexi(fcompo,desc2[j2,],doms,prefixo,main=tto,mnx=mapstat,mc.cores=4)
-			qv = mapexi(fd,desc2b[j2,],doms,prefixd,main=tt,mnx=FALSE,mc.cores=4)
+			qv = mapexi(fcompd,desc2b[j2,],doms,prefixd,main=tt,mnx=FALSE,mc.cores=4)
 			if (length(lstat2d) < j2 || is.null(lstat2d[[j2]])) {
 				lstat2d[[j2]] = statarray(qv,dates,dff$file)
+				lerr2[[j2]] = statarray(fcompd,c("rmse","bias","errx","dayx"),dff$file)
 			}
 
 			lstat2d[[j2]][,,,id,i] = qv
 
 			if (mapstat) {
-				lerr2[[j2]][,,,i] = addrmxd(lerr2[[j2]][,,,i],fd,nerr2[j2,i],id,parallel=id>1)
+				lerr2[[j2]][,,,i] = addrmxd(lerr2[[j2]][,,,i],fcompd,nerr2[j2,i],id,
+					parallel=id>1)
 				nerr2[j2,i] = nerr2[j2,i]+1
 			}
 
@@ -1730,11 +1743,15 @@ for (j in seq(along=lstat)) {
 	nc = min(2,ndom)
 	indl = round(seq(0,nl,length.out=nr+1)[-1])
 
-	for (i in seq((ndom-1)%/%nc+1)-1) {
+	# qfct: ll box 3lx2
+	l3d2 = elems(ndom,nr,nr,nc)
+	#for (i in seq((ndom-1)%/%nc+1)-1) {
+		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+	for (i in seq(along=l3d2)) {
 		png(sprintf("%s/stat%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 
-		for (id in 1:min(ndom-nc*i,nc)+nc*i) {
+		for (id in l3d2[[i]]) {
 			tt[2] = sprintf("domain %s",names(doms)[id])
 			il0 = 1
 
@@ -1775,22 +1792,27 @@ for (j in seq(along=lstat)) {
 		nr = nj = min(2,ndom)
 	}
 
-	for (i in seq((ndom-1)%/%nj+1)-1) {
+	d2t3 = elems(ndom,nr*nc/nj,nr,nc)
+	#for (i in seq((ndom-1)%/%nj+1)-1) {
+		#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+	for (i in seq(along=d2t3)) {
 		png(sprintf("%s/statv%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfrow=c(nr,nc))))
 
-		for (id in 1:min(ndom-nj*i,nj)+nj*i) {
+		for (id in d2t3[[i]]) {
 			if (etahigh > 0) {
 				for (it in indt) {
 					tth[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],tunit)
-					plotbv(qfc[,indl,id,it],etai[indl],main=tth,xlab=ss,ylab="eta",
+					etas = skeweta(etai[indl],min(etahigh,.1))
+					plotbv(qfc[,indl,id,it],etas,main=tth,xlab=ss,ylab="eta",
 						ylim=c(etahigh,yeta[2]))
 				}
 			}
 
 			for (it in indt) {
 				tt[2] = sprintf("domain %s, lead-time %g%s",names(doms)[id],ht[it],tunit)
-				plotbv(qfc[,,id,it],etai,main=tt,xlab=ss,ylab="eta",ylim=yeta)
+				etas = skeweta(etai)
+				plotbv(qfc[,,id,it],etas,main=tt,xlab=ss,ylab="eta",ylim=yeta)
 			}
 
 		}
