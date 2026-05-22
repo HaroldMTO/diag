@@ -86,15 +86,20 @@ if a.format != "GRIB":
 		else:
 			gem = (1.,1.,0.)
 
+		print("Pole sin(lat)/long:",gem)
+		print("Stretching:",gem[0])
+
 	lonlat = geom.get_lonlat_grid()
 	longs = lonlat[0]
 	lats = lonlat[1]
+	print("Lats:",lats[0],lats[1],"...")
+	print("Longs:",longs[0],longs[1],"...")
 	lats = lats.compressed()
 	longs = longs.compressed()
 
 	vv = geom.vcoordinate
 	if len(vv.levels) == 1:
-		exit("one level only")
+		print("one level only")
 
 	vab = vv.grid["gridlevels"]
 	Ai = numpy.empty(len(vab))

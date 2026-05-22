@@ -5,6 +5,11 @@ library(mapproj)
 library(parallel)
 library(mffield)
 
+png = function(filename="Rplot%03d.png",width=560,height=560,...)
+{
+	grDevices::png(filename,width,height,...)
+}
+
 readDom = function(filename,domd=list())
 {
 	df = read.table(filename,header=TRUE)
@@ -272,7 +277,10 @@ for (cmp in c(pngd,cargs$cmp)) {
 	names(lzmeanr)[n] = basename(cmp)
 }
 
-if (length(lstatr) == 0)  stop("no stat to compare")
+if (length(lstatr) == 0) {
+	cat("no stat to compare, quit\n")
+	q("no")
+}
 
 if (any(sapply(lzmeanr,is.null))) lzmeanr = NULL
 lstatd = lstatr[[1]]
@@ -332,8 +340,6 @@ for (j in seq(along=lstatd)) {
 
 	# qe err: ll box 3lx2
 	l3d2 = elems(ndom,nr,nr,nc)
-	#for (i in seq((ndom-1)%/%nc+1)-1) {
-		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
 	for (i in seq(along=l3d2)) {
 		png(sprintf("%s/err%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
@@ -358,27 +364,32 @@ for (j in seq(along=lstatd)) {
 
 	if (nl > 1) {
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
-		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
+		ntmax = 6
+		if (etahigh > 0 || wide) ntmax =3
+		if (length(indt) > ntmax) indt = indt[seq(1,length(indt),len=ntmax)]
 
-		nc = length(indt)
+		nc = min(length(indt),3)
+		nj = 1
+
+		etas = skeweta(etai)
 		if (etahigh > 0) {
 			indl = which(etai < etahigh)
 			if (length(indl) < 3) indl = which(etai < .5)
 			if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
+			etas = skeweta(etai,min(etahigh,.1))
 			nr = 2
-			nj = 1
 			tth = tt
 			tth[1] = sprintf("..., high levels",nom)
 		} else if (wide) {
-			nr = nj = 1
+			nr = 1
 		} else {
-			nr = nj = min(2,ndom)
+			nr = min(2,ndom)
+			nj = 2-(length(indt)-1)%/%nc
+			stopifnot(nj > 0)
 		}
 
 		# qe errv: box v 2x3t
 		d2t3 = elems(ndom,nr*nc/nj,nr,nc)
-		#for (i in seq((ndom-1)%/%nj+1)-1) {
-			#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
 		for (i in seq(along=d2t3)) {
 			png(sprintf("%s/errv%d_%s.png",pngd,i,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
@@ -386,7 +397,6 @@ for (j in seq(along=lstatd)) {
 			for (id in d2t3[[i]]) {
 				if (etahigh > 0) {
 					it0 = 1
-					etas = skeweta(etai[indl],min(etahigh,.1))
 					for (it in indt) {
 						tth[2] = sprintf("dom. %s, lead-time [%g,%g]%s",doms[id],
 							ht[it0],ht[it],tunit)
@@ -394,13 +404,12 @@ for (j in seq(along=lstatd)) {
 						if (length(dim(qet)) == 3) {
 							qet = matrix(aperm(qet,c(3,1:2)),ncol=length(indl))
 						}
-						plotbv(qet,etas,main=tth,xlab=ss,ylab="eta",ylim=c(etahigh,yeta[2]))
+						plotbv(qet,etas[indl],main=tth,xlab=ss,ylab="eta",ylim=c(etahigh,yeta[2]))
 						it0 = min(it+1,max(indt))
 					}
 				}
 
 				it0 = 1
-				etas = skeweta(etai)
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time [%g,%g]%s",doms[id],
 						ht[it0],ht[it],tunit)
@@ -443,16 +452,14 @@ for (j in seq(along=lstatd)) {
 
 	# rmxv score: ll plot 3lx2
 	l3d2 = elems(ndom,nr,nr,nc)
-	#for (i in seq((ndom-1)%/%nc+1)-1) {
-		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
 	for (i in seq(along=l3d2)) {
 		png(sprintf("%s/score%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 
 		for (id in l3d2[[i]]) {
-			tt[2] = sprintf("domain %s",doms[id])
+			tt[2] = sprintf("dom. %s",doms[id])
 			for (il in indl) {
-				if (nl > 1) tt[2] = sprintf("domain %s, level %d",doms[id],ilev[il])
+				if (nl > 1) tt[2] = sprintf("dom. %s, lev. %d",doms[id],ilev[il])
 				rmxvt = matrix(rmxv[il,id,,,],nrow=nt)
 				matplott(ht,rmxvt,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
 					xaxt="n")
@@ -483,7 +490,7 @@ for (j in seq(along=lstatd)) {
 			par(c(Gpart,list(mfcol=c(nr,nc))))
 
 			for (id in d2d2[[i]]) {
-				tt[2] = sprintf("domain %s",doms[id])
+				tt[2] = sprintf("dom. %s",doms[id])
 				rmxt = matrix(rmxm[id,,,],nrow=nt)
 				matplott(ht,rmxt,xlab=tlab,ylab=ss,main=tt,col=cols,lty=lty,legend=legend,
                xaxt="n")
@@ -496,28 +503,32 @@ for (j in seq(along=lstatd)) {
 		cat("Profile of scores by lead-time\n")
 		tt = sprintf("Score of %s",nom)
 		indt = which(apply(lstatd[[j]],5,function(x) any(! is.na(x))))
-		if (length(indt) > 3) indt = indt[seq(1,length(indt),len=3)]
-		nc = length(indt)
-		nj = min(2,ndom)
+		ntmax = 6
+		if (etahigh > 0 || wide) ntmax = 3
+		if (length(indt) > ntmax) indt = indt[seq(1,length(indt),len=ntmax)]
+
+		nc = min(length(indt),3)
+		nj = 1
+
+		etas = skeweta(etai)
 		if (etahigh > 0) {
 			indl = which(etai < etahigh)
 			if (length(indl) < 3) indl = which(etai < .5)
 			if (length(indl) < 3) stop(sprintf("not enough levels above .5"))
+			etas = skeweta(etai,min(etahigh,.1))
 			nr = 2
-			nj = 1
 			tth = tt
 			tth[1] = sprintf("..., high levels",nom)
 		} else if (wide) {
 			nr = 1
-			nj = 1
 		} else {
 			nr = min(2,ndom)
+			nj = 2-(length(indt)-1)%/%nc
+			stopifnot(nj > 0)
 		}
 
 		# rmxv scorev: v plot 2x3t
 		d2t3 = elems(ndom,nr*nc/nj,nr,nc)
-		#for (i in seq((ndom-1)%/%nj+1)-1) {
-			#for (id in 1:min(ndom-nj*i,nj)+nj*i) {
 		for (i in seq(along=d2t3)) {
 			png(sprintf("%s/scorev%d_%s.png",pngd,i,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
@@ -525,16 +536,14 @@ for (j in seq(along=lstatd)) {
 			for (id in d2t3[[i]]) {
 				tt[2] = sprintf("domain %s",doms[id])
 				if (etahigh > 0) {
-					etas = skeweta(etai[indl],min(etahigh,.1))
 					for (it in indt) {
 						tth[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 						rmxvl = matrix(rmxv[indl,id,it,,],nrow=length(indl))
-						matplotv(rmxvl,etas,x.leg="topright",xlab=ss,ylab="eta",main=tth,
+						matplotv(rmxvl,etas[indl],x.leg="topright",xlab=ss,ylab="eta",main=tth,
 							ylim=c(etahigh,yeta[2]),col=cols,lty=lty,legend=legend)
 					}
 				}
 
-				etas = skeweta(etai)
 				for (it in indt) {
 					tt[2] = sprintf("dom. %s, lead-time %g%s",doms[id],ht[it],tunit)
 					rmxvl = matrix(rmxv[,id,it,,],nrow=nl)
@@ -557,9 +566,8 @@ for (j in seq(along=lstatd)) {
 		zrmxv = aperm(zrmxv,c(2:3,1,4))
 
 		tt = sprintf("Zonal score of %s",nom)
-		nr = min(3,nl%/%2)
-		nc = min(2,nl%/%2)
-		if (nl == 1) nr = nc = 1
+		nc = min(2,1+(nl-1)%/%2)
+		nr = min(3,1+(nl-1)%/%nc)
 		indl = as.integer(seq(1,nl,length.out=nr*nc))
 
 		png(sprintf("%s/scorez1_%s.png",pngd,ss))
@@ -592,10 +600,9 @@ for (j in seq(along=lstatd)) {
 
 			tt = sprintf("Zonal score of %s",nom)
 			indt = which(apply(lzmeand[[j]],4,function(x) any(! is.na(x))))
-			nr = min(2,length(indt)%/%2)
-			nc = min(3,length(indt)%/%2)
-			if (length(indt) == 1) nr = nc = 1
-			if (length(indt) > nr*nc) indt = indt[seq(1,length(indt),len=nr*nc)]
+			if (length(indt) > 6) indt = indt[seq(1,length(indt),length.out=6)]
+			nr = 1+(length(indt)-1)%/%3
+			nc = 1+(length(indt)-1)%/%nr
 
 			png(sprintf("%s/scorevz1_%s.png",pngd,ss))
 			par(c(Gpart,list(mfrow=c(nr,nc))))
@@ -613,9 +620,8 @@ for (j in seq(along=lstatd)) {
 
 		tt = sprintf("Zonal bias of %s",nom)
 		indt = which(apply(lzmeand[[j]],4,function(x) any(! is.na(x))))
-		nr = min(3,length(indt))
 		nc = 1
-		if (length(indt) == 1) nr = nc = 1
+		nr = min(length(indt),3)
 		if (length(indt) > nr*nc) indt = indt[seq(1,length(indt),len=nr*nc)]
 		lat = sort(frlow$g4@theta)
 		latx = pretty(lat,8)
@@ -688,8 +694,6 @@ for (j in seq(along=lstatd)) {
 	# rmxt scoret: day t plot 3tx2
 	t3d2 = elems(ndom,nr,nr,nc)
 	for (i in seq(along=t3d2)) {
-	#for (i in seq((ndom-1)%/%nc+1)-1) {
-		#for (id in 1:min(ndom-nc*i,nc)+nc*i) {
 		png(sprintf("%s/scoret%d_%s.png",pngd,i,ss))
 		par(c(Gpart,list(mfcol=c(nr,nc))))
 

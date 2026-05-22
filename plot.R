@@ -21,7 +21,7 @@ scale10 = function(x,scientific=TRUE)
 
 plotb = function(x,y,range=3,lty=1,col="bisque",pch="+",ylim=NULL,...)
 {
-	if (is.null(ylim)) ylim = range(boxplot(y,plot=FALSE)$stats)
+	if (is.null(ylim)) ylim = range(boxplot(y,range=FALSE,plot=FALSE)$stats)
 	plot(x,colMeans(y),type="l",ylim=ylim,...)
 	w = diff(par("usr")[1:2])/(1.5*length(x)+2)
 	boxplot(y,range=range,col=col,lty=lty,pch=pch,pars=list(boxwex=w),add=TRUE,at=x,
